@@ -1,0 +1,78 @@
+# client_id below maps to the app registered in the Gravid Team partner org
+# (dev.shopify.com/dashboard/200713262/apps/348546859009). If Omar wants to move
+# this to omar@wwapps.io's org, delete the Gravid app and run
+# `shopify app config link --client-id=<new>` after logging in.
+
+client_id = "ef98823450589b9b9565c124ec73e8b0"
+name = "Audit Log - Staff Activity"
+handle = "audit-log-staff-activity"
+application_url = "https://ww-audit-log.fly.dev"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/scopes_update"]
+  uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "/webhooks/compliance"
+
+  [[webhooks.subscriptions]]
+  topics = ["products/create", "products/update", "products/delete"]
+  uri = "/webhooks/events/products"
+
+  [[webhooks.subscriptions]]
+  topics = ["inventory_levels/update"]
+  uri = "/webhooks/events/inventory"
+
+  [[webhooks.subscriptions]]
+  topics = ["orders/create", "orders/updated", "orders/cancelled", "orders/fulfilled"]
+  uri = "/webhooks/events/orders"
+
+  [[webhooks.subscriptions]]
+  topics = ["collections/create", "collections/update", "collections/delete"]
+  uri = "/webhooks/events/collections"
+
+  [[webhooks.subscriptions]]
+  topics = ["customers/create", "customers/update", "customers/delete"]
+  uri = "/webhooks/events/customers"
+
+  [[webhooks.subscriptions]]
+  topics = ["draft_orders/create", "draft_orders/update"]
+  uri = "/webhooks/events/draft_orders"
+
+  [[webhooks.subscriptions]]
+  topics = ["themes/create", "themes/update", "themes/publish", "themes/delete"]
+  uri = "/webhooks/events/themes"
+
+  [[webhooks.subscriptions]]
+  topics = ["shop/update"]
+  uri = "/webhooks/events/shop"
+
+  [[webhooks.subscriptions]]
+  topics = ["fulfillments/create", "fulfillments/update"]
+  uri = "/webhooks/events/fulfillments"
+
+[access_scopes]
+scopes = "read_products,read_orders,read_inventory,read_customers,read_draft_orders,read_fulfillments,read_themes,read_locations,read_content"
+
+[auth]
+redirect_urls = [
+  "https://ww-audit-log.fly.dev/auth/callback",
+  "https://ww-audit-log.fly.dev/auth/shopify/callback",
+  "https://ww-audit-log.fly.dev/api/auth"
+]
+
+[pos]
+embedded = false

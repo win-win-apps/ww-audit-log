@@ -1,0 +1,28 @@
+app = 'collection-auto-sort'
+primary_region = 'yyz'
+
+[build]
+
+[env]
+  PORT = '3000'
+  SCOPES = 'read_products,write_products'
+  SHOPIFY_APP_URL = 'https://collection-auto-sort.fly.dev'
+
+# Shane: set via `fly secrets set`:
+#   SHOPIFY_API_KEY, SHOPIFY_API_SECRET, DATABASE_URL, CRON_SECRET
+# The CRON_SECRET guards /api/cron/run-all; fly.io scheduled machines (or a
+# simple `fly machine run ... /api/cron/run-all` via supercronic) call it with
+# `Authorization: Bearer $CRON_SECRET`.
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

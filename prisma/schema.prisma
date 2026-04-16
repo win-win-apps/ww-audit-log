@@ -1,0 +1,80 @@
+// ww-audit-log Prisma schema
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["winwin_audit_log"]
+}
+
+model Session {
+  id                  String    @id
+  shop                String    @unique
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@schema("winwin_audit_log")
+}
+
+// Each admin change becomes one AuditEvent. Append-only. GC by retention.
+model AuditEvent {
+  id              String    @id @default(cuid())
+  shop            String
+  // Coarse category: product | inventory | order | collection | customer | theme | draft_order | fulfillment | shop | app
+  category        String
+  // Verbatim Shopify webhook topic, e.g. "products/update"
+  topic           String
+  // Shopify resource GID (e.g. gid://shopify/Product/1234). Nullable for shop-wide events.
+  resourceId      String?
+  // Human-readable resource title at time of event (e.g. "Cool T-shirt")
+  resourceTitle   String?
+  // Staff attribution from X-Shopify-Triggered-By header or payload
+  staffId         String?
+  staffName       String?
+  // Human sentence: "changed price of Red / M from $10 to $12"
+  summary         String
+  // Field-level diff. JSON: [{ field, before, after }]
+  diffJson        String    @default("[]")
+  // Raw webhook payload (truncated to 8k)
+  rawJson         String    @default("{}")
+  createdAt       DateTime  @default(now())
+
+  @@index([shop, createdAt])
+  @@index([shop, category, createdAt])
+  @@index([shop, staffId, createdAt])
+  @@index([shop, resourceId, createdAt])
+  @@schema("winwin_audit_log")
+}
+
+// Per-shop plan + settings
+model ShopSettings {
+  shop            String    @id
+  // Plan: free | paid | premium
+  plan            String    @default("free")
+  // Retention in days. free: 30, paid: 365, premium: 3650 (effectively unlimited)
+  retentionDays   Int       @default(30)
+  // Email alerts: { enabled, recipients[], categories[] }
+  alertsJson      String    @default("{\"enabled\":false,\"recipients\":[],\"categories\":[]}")
+  // Onboarding complete flag
+  onboardedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@schema("winwin_audit_log")
+}
