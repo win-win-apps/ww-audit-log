@@ -24,6 +24,7 @@ export default function App() {
           Timeline
         </Link>
         <Link to="/app/billing">Billing</Link>
+        <Link to="/app/backfill">Import history</Link>
         <Link to="/app/settings">Settings</Link>
       </NavMenu>
       <Outlet />

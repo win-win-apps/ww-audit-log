@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import {
   Page,
   Card,
@@ -307,6 +307,26 @@ export default function BillingPage() {
             );
           })}
         </InlineStack>
+
+        {plan === "paid" && (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="h3" variant="headingMd">
+                Import past events
+              </Text>
+              <Text as="p" tone="subdued">
+                As a Paid plan member you can backfill up to a year of events
+                from Shopify. This pulls in changes that happened before the
+                app was installed so your timeline is complete.
+              </Text>
+              <Box>
+                <Link to="/app/backfill">
+                  <Button variant="primary">Go to backfill</Button>
+                </Link>
+              </Box>
+            </BlockStack>
+          </Card>
+        )}
 
         <Card>
           <BlockStack gap="200">

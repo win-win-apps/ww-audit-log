@@ -74,6 +74,12 @@ model ShopSettings {
   alertsJson      String    @default("{\"enabled\":false,\"recipients\":[],\"categories\":[]}")
   // Onboarding complete flag
   onboardedAt     DateTime?
+  // Timestamp when the merchant last ran the 1-year events backfill. Null if
+  // they have never run it. Used to show status on the backfill button and
+  // prevent accidental re-runs that would re-insert the same historical events.
+  lastBackfillAt  DateTime?
+  // Summary stats from the most recent backfill run.
+  lastBackfillCount Int?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
