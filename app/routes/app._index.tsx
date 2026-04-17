@@ -15,8 +15,9 @@ import {
   Box,
   TextField,
   Icon,
+  Collapsible,
 } from "@shopify/polaris";
-import { SearchIcon, XIcon } from "@shopify/polaris-icons";
+import { SearchIcon, XIcon, ChevronDownIcon, ChevronUpIcon } from "@shopify/polaris-icons";
 import { useEffect, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -100,6 +101,30 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+// Render a value from the diff record in a way a merchant can read.
+// null / undefined get shown as "(empty)" so a "set from empty to X" change
+// is still obvious, rather than just showing "→ X" with a blank left side.
+function formatDiffValue(v: unknown): string {
+  if (v === null || v === undefined) return "(empty)";
+  if (typeof v === "string") return v === "" ? "(empty)" : v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return "(unreadable)";
+  }
+}
+
+// GIDs look like gid://shopify/Product/1234567890.
+// For the detail panel we just want "Product 1234567890" so merchants can copy
+// the id without seeing the scheme prefix.
+function shortResource(gid: string | null | undefined): string | null {
+  if (!gid) return null;
+  const parts = gid.split("/");
+  if (parts.length < 2) return gid;
+  return parts.slice(-2).join(" ");
+}
+
 // Only categories actually subscribed in shopify.app.toml for v1.0.
 // order, customer, draft_order, fulfillment are deferred to v1.1 pending
 // Shopify protected-customer-data approval.
@@ -122,6 +147,11 @@ export default function TimelinePage() {
   const [searchInput, setSearchInput] = useState<string>(filters.q);
   useEffect(() => setSearchInput(filters.q), [filters.q]);
 
+  // Which row is currently expanded to show its full diff. Only one at a time,
+  // both to keep the page readable and because most merchants will click one,
+  // glance, and click another.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams);
     if (!value) next.delete(key);
@@ -139,13 +169,110 @@ export default function TimelinePage() {
 
   const rows = events.map((e, i) => {
     const meta = CATEGORY_META[e.category] || { tone: undefined, label: e.category };
+    const isOpen = expandedId === e.id;
+
+    // diffJson is stored as a string so we have to parse each time. If it ever
+    // fails (bad webhook payload, schema drift) fall back to an empty list so
+    // the row still expands and just shows the metadata.
+    let parsedDiff: Array<{ field: string; before: unknown; after: unknown }> = [];
+    try {
+      const raw = JSON.parse(e.diffJson || "[]");
+      if (Array.isArray(raw)) parsedDiff = raw;
+    } catch {
+      parsedDiff = [];
+    }
+
+    const resourceShort = shortResource(e.resourceId);
+
     return (
-      <IndexTable.Row id={e.id} key={e.id} position={i}>
+      <IndexTable.Row
+        id={e.id}
+        key={e.id}
+        position={i}
+        onClick={() => setExpandedId(isOpen ? null : e.id)}
+      >
         <IndexTable.Cell>
           <Badge tone={meta.tone}>{meta.label}</Badge>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <Text as="span" variant="bodyMd">{e.summary}</Text>
+          <BlockStack gap="200">
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
+              <Text as="span" variant="bodyMd">{e.summary}</Text>
+              <Box>
+                <Icon
+                  source={isOpen ? ChevronUpIcon : ChevronDownIcon}
+                  tone="subdued"
+                />
+              </Box>
+            </InlineStack>
+            <Collapsible
+              open={isOpen}
+              id={`event-detail-${e.id}`}
+              transition={{ duration: "150ms", timingFunction: "ease-in-out" }}
+            >
+              <Box paddingBlockStart="200">
+                <BlockStack gap="300">
+                  <InlineStack gap="400" wrap>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      <Text as="span" variant="bodySm" fontWeight="semibold">
+                        Webhook:{" "}
+                      </Text>
+                      {e.topic}
+                    </Text>
+                    {resourceShort && (
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        <Text as="span" variant="bodySm" fontWeight="semibold">
+                          Resource:{" "}
+                        </Text>
+                        {e.resourceTitle ? `${e.resourceTitle} (${resourceShort})` : resourceShort}
+                      </Text>
+                    )}
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      <Text as="span" variant="bodySm" fontWeight="semibold">
+                        At:{" "}
+                      </Text>
+                      {new Date(e.createdAt).toLocaleString()}
+                    </Text>
+                  </InlineStack>
+
+                  {parsedDiff.length > 0 ? (
+                    <Box
+                      background="bg-surface-secondary"
+                      padding="300"
+                      borderRadius="200"
+                    >
+                      <BlockStack gap="200">
+                        <Text as="span" variant="bodySm" fontWeight="semibold">
+                          Field changes
+                        </Text>
+                        {parsedDiff.map((d, idx) => (
+                          <InlineStack gap="200" key={idx} wrap>
+                            <Text as="span" variant="bodySm" fontWeight="medium">
+                              {d.field}
+                            </Text>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              {formatDiffValue(d.before)}
+                            </Text>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              {"\u2192"}
+                            </Text>
+                            <Text as="span" variant="bodySm">
+                              {formatDiffValue(d.after)}
+                            </Text>
+                          </InlineStack>
+                        ))}
+                      </BlockStack>
+                    </Box>
+                  ) : (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      No field-level diff was captured for this event. This is
+                      normal for creates and deletes.
+                    </Text>
+                  )}
+                </BlockStack>
+              </Box>
+            </Collapsible>
+          </BlockStack>
         </IndexTable.Cell>
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
@@ -201,11 +328,10 @@ export default function TimelinePage() {
       subtitle={`${totalEvents} total events tracked on this store`}
       primaryAction={{
         content: "Export CSV",
-        // reloadDocument forces a real GET so the browser triggers the
-        // Content-Disposition: attachment response instead of trying to
-        // render CSV text inside the embedded iframe.
+        // Polaris Page primaryAction passes `external` straight to the <a>.
+        // Omit it entirely so React doesn't warn about a non-boolean attribute,
+        // and the browser triggers the Content-Disposition: attachment download.
         url: exportHref,
-        external: false,
       }}
       secondaryActions={[{ content: "Settings", url: "/app/settings" }]}
     >
