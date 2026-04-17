@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
+import { json } from "@remix-run/node";
 import { Form, useActionData, useLoaderData } from "@remix-run/react";
 import {
   Page,
@@ -7,15 +7,10 @@ import {
   BlockStack,
   Text,
   Button,
-  ButtonGroup,
-  TextField,
-  Checkbox,
   InlineStack,
   Banner,
   Box,
-  Divider,
 } from "@shopify/polaris";
-import { useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { getShopSettings, PLANS, type Plan } from "../utils/plan.server";
@@ -28,60 +23,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return json({
     plan: settings.plan,
     retentionDays: settings.retentionDays,
-    alerts: JSON.parse(settings.alertsJson),
     plans: PLANS,
   });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session, redirect } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent === "upgrade_paid" || intent === "upgrade_premium") {
-    // Kick off Shopify billing. In dev, just set plan locally.
-    const newPlan = intent === "upgrade_paid" ? "paid" : "premium";
-    const retention = PLANS[newPlan as Plan].retention;
-    await prisma.shopSettings.upsert({
-      where: { shop: session.shop },
-      update: { plan: newPlan, retentionDays: retention },
-      create: { shop: session.shop, plan: newPlan, retentionDays: retention },
-    });
-    return json({ ok: true, message: `Upgraded to ${PLANS[newPlan as Plan].label}` });
+  if (intent === "upgrade") {
+    // All paid plan changes go through Shopify managed pricing.
+    // That page lets the merchant accept the charge, handles proration,
+    // and Shopify notifies us via webhook when the plan changes.
+    const storeHandle = session.shop.replace(".myshopify.com", "");
+    const url = `https://admin.shopify.com/store/${storeHandle}/charges/audit-log-staff-activity/pricing_plans`;
+    return redirect(url, { target: "_top" });
   }
 
   if (intent === "downgrade_free") {
+    // Downgrade is free so we handle it locally. Shopify billing does
+    // not need to be involved (no charge to cancel on the merchant side
+    // unless they had an active paid subscription, which Shopify handles
+    // via the pricing page, not here).
     await prisma.shopSettings.upsert({
       where: { shop: session.shop },
       update: { plan: "free", retentionDays: 10 },
       create: { shop: session.shop, plan: "free", retentionDays: 10 },
     });
-    return json({ ok: true, message: "Switched to Free plan" });
-  }
-
-  if (intent === "save_alerts") {
-    const enabled = formData.get("alerts_enabled") === "on";
-    const recipients = String(formData.get("alerts_recipients") || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const categories = (formData.getAll("alert_categories") || []).map(String);
-    await prisma.shopSettings.upsert({
-      where: { shop: session.shop },
-      update: { alertsJson: JSON.stringify({ enabled, recipients, categories }) },
-      create: { shop: session.shop, alertsJson: JSON.stringify({ enabled, recipients, categories }) },
-    });
-    return json({ ok: true, message: "Alert settings saved" });
+    return json({ ok: true, message: "Switched to Free plan. Events past 10 days will be purged on the next daily cleanup." });
   }
 
   return json({ ok: false, message: "Unknown action" });
 };
 
 export default function SettingsPage() {
-  const { plan, retentionDays, alerts, plans } = useLoaderData<typeof loader>();
+  const { plan, retentionDays, plans } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const [alertsEnabled, setAlertsEnabled] = useState<boolean>(alerts.enabled);
-  const [recipients, setRecipients] = useState<string>((alerts.recipients || []).join(", "));
 
   return (
     <Page title="Settings" backAction={{ url: "/app" }}>
@@ -96,7 +74,7 @@ export default function SettingsPage() {
           <BlockStack gap="400">
             <Text as="h2" variant="headingLg">Your plan</Text>
             <Text as="p" tone="subdued">
-              You are on the <strong>{plans[plan as Plan].label}</strong> plan with {retentionDays}-day history.
+              You are on the <strong>{plans[plan as Plan].label}</strong> plan with {retentionDays}-day event history.
             </Text>
             <InlineStack gap="400" wrap>
               {(["free", "paid", "premium"] as Plan[]).map((p) => {
@@ -114,15 +92,22 @@ export default function SettingsPage() {
                   >
                     <BlockStack gap="200">
                       <Text as="h3" variant="headingMd">{info.label}</Text>
-                      <Text as="p" variant="headingLg">${info.price}<Text as="span" variant="bodySm" tone="subdued"> / month</Text></Text>
+                      <Text as="p" variant="headingLg">
+                        ${info.price}
+                        <Text as="span" variant="bodySm" tone="subdued"> / month</Text>
+                      </Text>
                       <Text as="p" variant="bodySm" tone="subdued">
-                        {p === "free" && "Products, inventory, orders. 10-day history."}
-                        {p === "paid" && "All events. 1-year history. CSV + JSON export. Email alerts."}
-                        {p === "premium" && "Everything in Pro. 10-year history. Custom alert rules. Priority support."}
+                        {p === "free" && "Products and inventory tracking. 10-day history. CSV export."}
+                        {p === "paid" && "Adds collections tracking. 365-day history. Staff filter. Full-history CSV export."}
+                        {p === "premium" && "Adds theme and shop setting changes. 10-year retention. Priority support."}
                       </Text>
                       {!current && (
                         <Form method="post">
-                          <input type="hidden" name="intent" value={p === "free" ? "downgrade_free" : `upgrade_${p}`} />
+                          <input
+                            type="hidden"
+                            name="intent"
+                            value={p === "free" ? "downgrade_free" : "upgrade"}
+                          />
                           <Button submit variant={p === "free" ? "secondary" : "primary"}>
                             {p === "free" ? "Downgrade to Free" : `Upgrade to ${info.label}`}
                           </Button>
@@ -134,49 +119,30 @@ export default function SettingsPage() {
                 );
               })}
             </InlineStack>
+            <Text as="p" variant="bodySm" tone="subdued">
+              All paid upgrades go through Shopify's billing page. You will be asked to approve the charge before anything is billed.
+            </Text>
           </BlockStack>
-        </Card>
-
-        <Card>
-          <Form method="post">
-            <input type="hidden" name="intent" value="save_alerts" />
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingLg">Email alerts</Text>
-              <Checkbox
-                label="Send me an email when a critical event happens"
-                checked={alertsEnabled}
-                onChange={setAlertsEnabled}
-                name="alerts_enabled"
-              />
-              {alertsEnabled && (
-                <>
-                  <TextField
-                    label="Send alerts to"
-                    helpText="Comma-separated list of email addresses"
-                    value={recipients}
-                    onChange={setRecipients}
-                    name="alerts_recipients"
-                    autoComplete="email"
-                  />
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    Alerts fire for: product deletions, inventory hitting zero, theme publishes, and order cancellations.
-                  </Text>
-                </>
-              )}
-              <Divider />
-              <Box>
-                <Button submit variant="primary">Save alert settings</Button>
-              </Box>
-            </BlockStack>
-          </Form>
         </Card>
 
         <Card>
           <BlockStack gap="200">
             <Text as="h2" variant="headingLg">Data retention</Text>
             <Text as="p" tone="subdued">
-              Events older than {retentionDays} days are automatically deleted. Upgrade to keep history longer.
+              Events older than {retentionDays} days are automatically deleted. Upgrade for longer retention.
             </Text>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingLg">Privacy</Text>
+            <Text as="p" tone="subdued">
+              This app only records admin actions on your store. No customer personal data is stored.
+            </Text>
+            <Box>
+              <Button url="/privacy" target="_blank">View privacy policy</Button>
+            </Box>
           </BlockStack>
         </Card>
       </BlockStack>

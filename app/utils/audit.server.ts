@@ -21,9 +21,57 @@ export function parseStaff(headers: Headers, payload: any): { staffId: string | 
   return { staffId: null, staffName: null };
 }
 
+// Keys that commonly hold customer PII across Shopify webhook payloads.
+// We strip these before storing rawJson. v1.0 doesn't subscribe to
+// customer-bearing topics at all, but scrubbing here is defense in depth
+// so that a future webhook addition can't accidentally leak PII into our DB.
+const PII_KEYS = new Set([
+  "email",
+  "phone",
+  "first_name",
+  "last_name",
+  "name",
+  "customer_email",
+  "customer_phone",
+  "contact_email",
+  "address1",
+  "address2",
+  "street",
+  "zip",
+  "postal_code",
+  "billing_address",
+  "shipping_address",
+  "default_address",
+  "addresses",
+  "note_attributes",
+  "client_details",
+  "ip",
+  "user_agent",
+  "accepts_marketing",
+  "marketing_opt_in_level",
+  "sms_marketing_consent",
+  "email_marketing_consent",
+]);
+
+function scrubPII(value: any): any {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(scrubPII);
+  if (typeof value === "object") {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (PII_KEYS.has(k)) out[k] = "[redacted]";
+      else out[k] = scrubPII(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 // Trim a raw payload to <= 8k bytes to cap storage cost.
+// Also scrubs well-known PII keys before serializing.
 export function trimRaw(raw: any): string {
-  const s = JSON.stringify(raw ?? {});
+  const scrubbed = scrubPII(raw ?? {});
+  const s = JSON.stringify(scrubbed);
   if (s.length <= 8000) return s;
   return s.slice(0, 7980) + "…[trimmed]";
 }
