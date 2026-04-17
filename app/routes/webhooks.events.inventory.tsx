@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import { parseStaff, recordEvent } from "../utils/audit.server";
 import { getShopSettings, canRecordCategory, type Plan } from "../utils/plan.server";
+import { friendlySummary } from "../utils/humanize";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
@@ -10,21 +11,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const staff = parseStaff(request.headers, payload);
   const p = payload as any;
-  const available = p?.available;
+  const available = typeof p?.available === "number" ? p.available : null;
   const inventoryItemId = p?.inventory_item_id;
-  const locationId = p?.location_id;
+  const topicSlash = topic.toLowerCase().replace(/_/g, "/");
+  const resourceTitle = `Inventory item ${inventoryItemId}`;
 
-  const summary = `${staff.staffName || "A staff member"} set inventory to ${available} at location ${locationId}`;
+  // We emit one diff entry so the detail panel can show the new count in the
+  // Before/After columns (Before stays empty because Shopify's webhook doesn't
+  // tell us the previous value for inventory_levels).
+  const diff =
+    available !== null
+      ? [{ field: "inventory", before: null, after: available }]
+      : [];
+
+  const summary = friendlySummary({
+    topic: topicSlash,
+    staffName: staff.staffName,
+    resourceTitle,
+    diff,
+    inventoryAvailable: available,
+  });
 
   await recordEvent({
     shop,
     category: "inventory",
-    topic: topic.toLowerCase().replace(/_/g, "/"),
+    topic: topicSlash,
     resourceId: inventoryItemId ? `gid://shopify/InventoryItem/${inventoryItemId}` : null,
-    resourceTitle: `Inventory item ${inventoryItemId}`,
+    resourceTitle,
     staffId: staff.staffId,
     staffName: staff.staffName,
     summary,
+    diff,
     raw: payload,
   });
 

@@ -9,6 +9,7 @@ import {
   Badge,
   BlockStack,
   InlineStack,
+  InlineGrid,
   EmptyState,
   Button,
   Banner,
@@ -16,15 +17,27 @@ import {
   TextField,
   Icon,
   Collapsible,
+  Divider,
 } from "@shopify/polaris";
 import { SearchIcon, XIcon, ChevronDownIcon, ChevronUpIcon } from "@shopify/polaris-icons";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { getShopSettings } from "../utils/plan.server";
 import { PLANS, CATEGORY_PLAN, type Plan } from "../utils/plan";
+import { humanizeField, humanizeValue, friendlySummary } from "../utils/humanize";
 
 const prisma = new PrismaClient();
+
+const SORT_KEYS = ["type", "event", "who", "when"] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
+function orderByFor(sort: SortKey, dir: "asc" | "desc"): any {
+  if (sort === "type") return { category: dir };
+  if (sort === "who") return { staffName: dir };
+  if (sort === "event") return { summary: dir };
+  return { createdAt: dir };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -35,6 +48,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const category = url.searchParams.get("category") || "";
   const staff = url.searchParams.get("staff") || "";
   const q = url.searchParams.get("q") || "";
+
+  // Sorting
+  const rawSort = url.searchParams.get("sort") as SortKey | null;
+  const sort: SortKey = rawSort && SORT_KEYS.includes(rawSort) ? rawSort : "when";
+  const dir = url.searchParams.get("dir") === "asc" ? "asc" : "desc";
 
   // Clamp the days filter to the plan's retention. Merchants on Free cant meaningfully
   // pick Last 90 days because nothing older than 10 is retained. Show a banner in that case.
@@ -57,7 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const [events, totalEvents, distinctStaff] = await Promise.all([
     prisma.auditEvent.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: orderByFor(sort, dir as "asc" | "desc"),
       take: 100,
     }),
     prisma.auditEvent.count({ where: { shop } }),
@@ -89,6 +107,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       effectiveDays,
       clamped: requestedDays > effectiveDays,
     },
+    sort: { key: sort, dir },
   });
 };
 
@@ -99,30 +118,6 @@ function relativeTime(iso: string): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
   return new Date(iso).toLocaleDateString();
-}
-
-// Render a value from the diff record in a way a merchant can read.
-// null / undefined get shown as "(empty)" so a "set from empty to X" change
-// is still obvious, rather than just showing "→ X" with a blank left side.
-function formatDiffValue(v: unknown): string {
-  if (v === null || v === undefined) return "(empty)";
-  if (typeof v === "string") return v === "" ? "(empty)" : v;
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return "(unreadable)";
-  }
-}
-
-// GIDs look like gid://shopify/Product/1234567890.
-// For the detail panel we just want "Product 1234567890" so merchants can copy
-// the id without seeing the scheme prefix.
-function shortResource(gid: string | null | undefined): string | null {
-  if (!gid) return null;
-  const parts = gid.split("/");
-  if (parts.length < 2) return gid;
-  return parts.slice(-2).join(" ");
 }
 
 // Only categories actually subscribed in shopify.app.toml for v1.0.
@@ -138,7 +133,7 @@ const CATEGORY_META: Record<string, { tone: any; label: string }> = {
 };
 
 export default function TimelinePage() {
-  const { events, totalEvents, staffOptions, settings, planLabel, filters } =
+  const { events, totalEvents, staffOptions, settings, planLabel, filters, sort } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -164,6 +159,19 @@ export default function TimelinePage() {
     if (filters.requestedDays !== settings.retentionDays) {
       next.set("days", String(filters.requestedDays));
     }
+    // keep the current sort when clearing filters
+    if (sort.key !== "when") next.set("sort", sort.key);
+    if (sort.dir !== "desc") next.set("dir", sort.dir);
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortColumnIndex = SORT_KEYS.indexOf(sort.key as SortKey);
+  const sortDirection = sort.dir === "asc" ? "ascending" : "descending";
+
+  const onSort = (index: number, direction: "ascending" | "descending") => {
+    const next = new URLSearchParams(searchParams);
+    next.set("sort", SORT_KEYS[index]);
+    next.set("dir", direction === "ascending" ? "asc" : "desc");
     setSearchParams(next, { replace: true });
   };
 
@@ -182,7 +190,17 @@ export default function TimelinePage() {
       parsedDiff = [];
     }
 
-    const resourceShort = shortResource(e.resourceId);
+    // Rebuild the summary client-side for display. This handles old rows that
+    // were recorded before the server-side summary was humanized (e.g. the
+    // ones with "variant.Default Title.price" baked in). For rows where we
+    // can't derive anything cleaner, fall back to the stored summary.
+    const rebuilt = friendlySummary({
+      topic: e.topic,
+      staffName: e.staffName,
+      resourceTitle: e.resourceTitle,
+      diff: parsedDiff,
+    });
+    const displaySummary = rebuilt || e.summary;
 
     return (
       <IndexTable.Row
@@ -197,7 +215,7 @@ export default function TimelinePage() {
         <IndexTable.Cell>
           <BlockStack gap="200">
             <InlineStack gap="200" blockAlign="center" wrap={false}>
-              <Text as="span" variant="bodyMd">{e.summary}</Text>
+              <Text as="span" variant="bodyMd">{displaySummary}</Text>
               <Box>
                 <Icon
                   source={isOpen ? ChevronUpIcon : ChevronDownIcon}
@@ -212,26 +230,27 @@ export default function TimelinePage() {
             >
               <Box paddingBlockStart="200">
                 <BlockStack gap="300">
+                  {/* Simple meta line, no webhook jargon, no GIDs. */}
                   <InlineStack gap="400" wrap>
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      <Text as="span" variant="bodySm" fontWeight="semibold">
-                        Webhook:{" "}
-                      </Text>
-                      {e.topic}
-                    </Text>
-                    {resourceShort && (
+                    {e.resourceTitle && (
                       <Text as="span" variant="bodySm" tone="subdued">
                         <Text as="span" variant="bodySm" fontWeight="semibold">
-                          Resource:{" "}
+                          Item:{" "}
                         </Text>
-                        {e.resourceTitle ? `${e.resourceTitle} (${resourceShort})` : resourceShort}
+                        {e.resourceTitle}
                       </Text>
                     )}
                     <Text as="span" variant="bodySm" tone="subdued">
                       <Text as="span" variant="bodySm" fontWeight="semibold">
-                        At:{" "}
+                        When:{" "}
                       </Text>
                       {new Date(e.createdAt).toLocaleString()}
+                    </Text>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      <Text as="span" variant="bodySm" fontWeight="semibold">
+                        Who:{" "}
+                      </Text>
+                      {e.staffName || "A staff member"}
                     </Text>
                   </InlineStack>
 
@@ -242,31 +261,43 @@ export default function TimelinePage() {
                       borderRadius="200"
                     >
                       <BlockStack gap="200">
-                        <Text as="span" variant="bodySm" fontWeight="semibold">
-                          Field changes
-                        </Text>
+                        {/* Mini three-column table: What changed / Before / After */}
+                        <InlineGrid columns={["oneThird", "oneThird", "oneThird"]} gap="200">
+                          <Text as="span" variant="bodySm" fontWeight="semibold">
+                            What changed
+                          </Text>
+                          <Text as="span" variant="bodySm" fontWeight="semibold">
+                            Before
+                          </Text>
+                          <Text as="span" variant="bodySm" fontWeight="semibold">
+                            After
+                          </Text>
+                        </InlineGrid>
+                        <Divider />
                         {parsedDiff.map((d, idx) => (
-                          <InlineStack gap="200" key={idx} wrap>
-                            <Text as="span" variant="bodySm" fontWeight="medium">
-                              {d.field}
-                            </Text>
-                            <Text as="span" variant="bodySm" tone="subdued">
-                              {formatDiffValue(d.before)}
-                            </Text>
-                            <Text as="span" variant="bodySm" tone="subdued">
-                              {"\u2192"}
-                            </Text>
-                            <Text as="span" variant="bodySm">
-                              {formatDiffValue(d.after)}
-                            </Text>
-                          </InlineStack>
+                          <Fragment key={idx}>
+                            <InlineGrid
+                              columns={["oneThird", "oneThird", "oneThird"]}
+                              gap="200"
+                            >
+                              <Text as="span" variant="bodySm" fontWeight="medium">
+                                {humanizeField(d.field)}
+                              </Text>
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                {humanizeValue(d.field, d.before)}
+                              </Text>
+                              <Text as="span" variant="bodySm">
+                                {humanizeValue(d.field, d.after)}
+                              </Text>
+                            </InlineGrid>
+                          </Fragment>
                         ))}
                       </BlockStack>
                     </Box>
                   ) : (
                     <Text as="span" variant="bodySm" tone="subdued">
-                      No field-level diff was captured for this event. This is
-                      normal for creates and deletes.
+                      No field-level details were captured for this event. This
+                      is normal for newly created or deleted items.
                     </Text>
                   )}
                 </BlockStack>
@@ -487,6 +518,11 @@ export default function TimelinePage() {
                 { title: "Who" },
                 { title: "When" },
               ]}
+              sortable={[true, true, true, true]}
+              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 3}
+              sortDirection={sortDirection}
+              onSort={onSort}
+              defaultSortDirection="descending"
             >
               {rows}
             </IndexTable>
