@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 export type Plan = "free" | "paid" | "premium";
 
 export const PLANS: Record<Plan, { label: string; price: number; retention: number }> = {
-  free: { label: "Free", price: 0, retention: 30 },
+  free: { label: "Free", price: 0, retention: 10 },
   paid: { label: "Pro", price: 3.99, retention: 365 },
   premium: { label: "Unlimited", price: 7.99, retention: 3650 },
 };

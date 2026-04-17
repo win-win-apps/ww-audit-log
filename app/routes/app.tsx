@@ -24,6 +24,7 @@ export default function App() {
           Timeline
         </Link>
         <Link to="/app/settings">Settings</Link>
+        <Link to="/app/pricing">Pricing</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

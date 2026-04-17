@@ -10,3 +10,4 @@ public/build
 .env
 *.sqlite-wal
 *.sqlite-shm
+link-app.exp

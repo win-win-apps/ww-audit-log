@@ -67,8 +67,8 @@ model ShopSettings {
   shop            String    @id
   // Plan: free | paid | premium
   plan            String    @default("free")
-  // Retention in days. free: 30, paid: 365, premium: 3650 (effectively unlimited)
-  retentionDays   Int       @default(30)
+  // Retention in days. free: 10, paid: 365, premium: 3650 (effectively unlimited)
+  retentionDays   Int       @default(10)
   // Email alerts: { enabled, recipients[], categories[] }
   alertsJson      String    @default("{\"enabled\":false,\"recipients\":[],\"categories\":[]}")
   // Onboarding complete flag

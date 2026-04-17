@@ -32,7 +32,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const category = url.searchParams.get("category") || "";
   const staff = url.searchParams.get("staff") || "";
   const q = url.searchParams.get("q") || "";
-  const days = Number(url.searchParams.get("days") || "30");
+  const days = Number(url.searchParams.get("days") || "10");
 
   const since = new Date();
   since.setDate(since.getDate() - days);
@@ -138,6 +138,7 @@ export default function TimelinePage() {
   const daysOptions = [
     { label: "Last 24 hours", value: "1" },
     { label: "Last 7 days", value: "7" },
+    { label: "Last 10 days", value: "10" },
     { label: "Last 30 days", value: "30" },
     { label: "Last 90 days", value: "90" },
     { label: "Last year", value: "365" },
@@ -158,7 +159,7 @@ export default function TimelinePage() {
       <BlockStack gap="400">
         {settings.plan === "free" && (
           <Banner title={`You are on the ${planLabel} plan`} tone="info">
-            <Text as="p">Tracking products, inventory, and orders. 30-day history.</Text>
+            <Text as="p">Tracking products, inventory, and orders. 10-day history.</Text>
             <Box paddingBlockStart="200">
               <Link to="/app/settings">Upgrade to track collections, customers, themes, and keep a full year of history.</Link>
             </Box>

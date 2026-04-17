@@ -53,8 +53,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "downgrade_free") {
     await prisma.shopSettings.upsert({
       where: { shop: session.shop },
-      update: { plan: "free", retentionDays: 30 },
-      create: { shop: session.shop, plan: "free", retentionDays: 30 },
+      update: { plan: "free", retentionDays: 10 },
+      create: { shop: session.shop, plan: "free", retentionDays: 10 },
     });
     return json({ ok: true, message: "Switched to Free plan" });
   }
@@ -116,7 +116,7 @@ export default function SettingsPage() {
                       <Text as="h3" variant="headingMd">{info.label}</Text>
                       <Text as="p" variant="headingLg">${info.price}<Text as="span" variant="bodySm" tone="subdued"> / month</Text></Text>
                       <Text as="p" variant="bodySm" tone="subdued">
-                        {p === "free" && "Products, inventory, orders. 30-day history."}
+                        {p === "free" && "Products, inventory, orders. 10-day history."}
                         {p === "paid" && "All events. 1-year history. CSV + JSON export. Email alerts."}
                         {p === "premium" && "Everything in Pro. 10-year history. Custom alert rules. Priority support."}
                       </Text>
