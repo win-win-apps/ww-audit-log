@@ -13,22 +13,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const orderNumber = p?.order_number ?? p?.name ?? p?.id;
   const id = p?.id ? `gid://shopify/Order/${p.id}` : null;
   const currency = p?.currency || "USD";
+  const staffName = staff.staffName || "A staff member";
+  const topicSlash = topic.toLowerCase().replace(/_/g, "/");
 
   let summary = "";
   if (topic === "ORDERS_CREATE") {
     summary = `New order #${orderNumber} placed for ${money(p?.total_price, currency)}`;
   } else if (topic === "ORDERS_UPDATED") {
-    summary = `${staff.staffName || "A staff member"} updated order #${orderNumber}`;
+    summary = `${staffName} updated order #${orderNumber}`;
   } else if (topic === "ORDERS_CANCELLED") {
-    summary = `${staff.staffName || "A staff member"} cancelled order #${orderNumber}`;
+    summary = `${staffName} cancelled order #${orderNumber}`;
   } else if (topic === "ORDERS_FULFILLED") {
     summary = `Order #${orderNumber} was marked fulfilled`;
+  } else if (topic === "ORDERS_PAID") {
+    summary = `Order #${orderNumber} was marked paid`;
+  } else if (topic === "ORDERS_PARTIALLY_FULFILLED") {
+    summary = `Order #${orderNumber} was partially fulfilled`;
+  } else if (topic === "ORDERS_EDITED") {
+    summary = `${staffName} edited line items on order #${orderNumber}`;
+  } else if (topic === "ORDERS_DELETE") {
+    summary = `${staffName} deleted order #${orderNumber}`;
+  } else {
+    summary = `${staffName} changed order #${orderNumber}`;
   }
 
   await recordEvent({
     shop,
     category: "order",
-    topic: topic.toLowerCase().replace(/_/g, "/"),
+    topic: topicSlash,
     resourceId: id,
     resourceTitle: `Order #${orderNumber}`,
     staffId: staff.staffId,

@@ -166,21 +166,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 const PLAN_FEATURES: Record<Plan, string[]> = {
   free: [
-    "Products and inventory tracking",
+    "Product and inventory changes",
     "10-day history",
     "CSV export (last 7 days)",
   ],
   paid: [
     "Everything in Free",
-    "Collections tracking",
+    "Orders, draft orders, fulfillments, refunds",
+    "Discounts, locations, files, collections",
     "1 year of history",
     "Filter by staff",
     "Full-history CSV export",
   ],
   premium: [
     "Everything in Pro",
-    "Theme changes",
-    "Shop setting changes",
+    "Customer changes",
+    "Theme edits and shop settings",
+    "Markets and domains",
     "10 years of history",
     "Priority support",
   ],

@@ -12,14 +12,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const p = payload as any;
   const id = p?.id ? `gid://shopify/DraftOrder/${p.id}` : null;
   const num = p?.name ?? p?.id;
-  const summary = topic === "DRAFT_ORDERS_CREATE"
-    ? `${staff.staffName || "A staff member"} created draft order ${num}`
-    : `${staff.staffName || "A staff member"} updated draft order ${num}`;
+  const staffName = staff.staffName || "A staff member";
+  const topicSlash = topic.toLowerCase().replace(/_/g, "/");
+
+  let summary = "";
+  if (topic === "DRAFT_ORDERS_CREATE") summary = `${staffName} created draft order ${num}`;
+  else if (topic === "DRAFT_ORDERS_UPDATE") summary = `${staffName} updated draft order ${num}`;
+  else if (topic === "DRAFT_ORDERS_DELETE") summary = `${staffName} deleted draft order ${num}`;
+  else summary = `${staffName} changed draft order ${num}`;
 
   await recordEvent({
     shop,
     category: "draft_order",
-    topic: topic.toLowerCase().replace(/_/g, "/"),
+    topic: topicSlash,
     resourceId: id,
     resourceTitle: `Draft ${num}`,
     staffId: staff.staffId,

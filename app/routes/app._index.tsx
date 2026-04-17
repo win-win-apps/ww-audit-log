@@ -122,9 +122,10 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-// Only categories actually subscribed in shopify.app.toml for v1.0.
-// order, customer, draft_order, fulfillment are deferred to v1.1 pending
-// Shopify protected-customer-data approval.
+// Every category we know how to record. Mirrors CATEGORY_PLAN in plan.ts.
+// Polaris Badge tones: success, attention, new, warning, critical, info,
+// magic, read-only. We use them as a rough palette — not meant to carry
+// semantic weight beyond "merchants can tell rows apart at a glance".
 const CATEGORY_META: Record<string, { tone: any; label: string }> = {
   product: { tone: "success", label: "Product" },
   inventory: { tone: "attention", label: "Inventory" },
@@ -132,6 +133,16 @@ const CATEGORY_META: Record<string, { tone: any; label: string }> = {
   theme: { tone: "warning", label: "Theme" },
   shop: { tone: "critical", label: "Shop" },
   app: { tone: undefined, label: "App" },
+  order: { tone: "info", label: "Order" },
+  draft_order: { tone: "info", label: "Draft order" },
+  fulfillment: { tone: "success", label: "Fulfillment" },
+  refund: { tone: "critical", label: "Refund" },
+  customer: { tone: "magic", label: "Customer" },
+  discount: { tone: "attention", label: "Discount" },
+  location: { tone: "new", label: "Location" },
+  file: { tone: undefined, label: "File" },
+  market: { tone: "warning", label: "Market" },
+  domain: { tone: "critical", label: "Domain" },
 };
 
 export default function TimelinePage() {

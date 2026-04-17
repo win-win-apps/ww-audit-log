@@ -6,31 +6,27 @@ import { getShopSettings, canRecordCategory, type Plan } from "../utils/plan.ser
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
   const settings = await getShopSettings(shop);
-  if (!canRecordCategory(settings.plan as Plan, "fulfillment")) return new Response();
+  if (!canRecordCategory(settings.plan as Plan, "market")) return new Response();
 
   const staff = parseStaff(request.headers, payload);
   const p = payload as any;
-  const orderId = p?.order_id;
-  const status = p?.status;
-  const id = p?.id ? `gid://shopify/Fulfillment/${p.id}` : null;
+  const name = p?.name || `Market ${p?.id ?? ""}`.trim();
+  const id = p?.id ? `gid://shopify/Market/${p.id}` : null;
   const staffName = staff.staffName || "A staff member";
   const topicSlash = topic.toLowerCase().replace(/_/g, "/");
 
   let summary = "";
-  if (topic === "FULFILLMENTS_CREATE") {
-    summary = `${staffName} started fulfillment on order ${orderId}`;
-  } else if (topic === "FULFILLMENTS_UPDATE") {
-    summary = `Fulfillment on order ${orderId} is now ${status || "updated"}`;
-  } else {
-    summary = `Fulfillment on order ${orderId} changed`;
-  }
+  if (topic === "MARKETS_CREATE") summary = `${staffName} created market ${name}`;
+  else if (topic === "MARKETS_UPDATE") summary = `${staffName} updated market ${name}`;
+  else if (topic === "MARKETS_DELETE") summary = `${staffName} deleted market ${name}`;
+  else summary = `${staffName} changed market ${name}`;
 
   await recordEvent({
     shop,
-    category: "fulfillment",
+    category: "market",
     topic: topicSlash,
     resourceId: id,
-    resourceTitle: `Fulfillment ${p?.id || ""}`.trim(),
+    resourceTitle: name,
     staffId: staff.staffId,
     staffName: staff.staffName,
     summary,

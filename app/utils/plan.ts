@@ -13,26 +13,31 @@ export const PLANS: Record<Plan, { label: string; price: number; retention: numb
 };
 
 // Which webhook categories are included in which plan.
-// v1.0 scope (what we actually subscribe to in shopify.app.toml):
-//   Free    -> products, inventory
-//   Pro     -> adds collections
-//   Premium -> adds themes, shop
-// Deferred to v1.1 (requires Shopify protected customer data approval):
-//   order, customer, draft_order, fulfillment
-// We intentionally leave the deferred entries here so that adding the webhook
-// subscriptions later will immediately flow through plan gating without forgetting.
+// Coverage tier by plan:
+//   Free    -> catalogue basics: products, inventory
+//   Pro     -> adds ops data: collections, orders, draft orders,
+//              fulfillments, refunds, discounts, locations, files
+//   Premium -> adds security-sensitive surfaces: themes, shop settings,
+//              customers, markets, domains
 export const CATEGORY_PLAN: Record<string, Plan> = {
   product: "free",
   inventory: "free",
-  collection: "paid",
-  theme: "premium",
-  shop: "premium",
   app: "free",
-  // Deferred to v1.1:
-  order: "free",
-  customer: "paid",
+
+  collection: "paid",
+  order: "paid",
   draft_order: "paid",
   fulfillment: "paid",
+  refund: "paid",
+  discount: "paid",
+  location: "paid",
+  file: "paid",
+
+  theme: "premium",
+  shop: "premium",
+  customer: "premium",
+  market: "premium",
+  domain: "premium",
 };
 
 export function canRecordCategory(plan: Plan, category: string): boolean {

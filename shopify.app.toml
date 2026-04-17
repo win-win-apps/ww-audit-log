@@ -27,6 +27,7 @@ api_version = "2026-04"
   uri = "/webhooks/compliance"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
+  # Catalogue
   [[webhooks.subscriptions]]
   topics = [ "products/create", "products/update", "products/delete" ]
   uri = "/webhooks/events/products"
@@ -36,22 +37,91 @@ api_version = "2026-04"
   uri = "/webhooks/events/inventory"
 
   [[webhooks.subscriptions]]
-  topics = ["collections/create", "collections/update", "collections/delete"]
+  topics = [ "collections/create", "collections/update", "collections/delete" ]
   uri = "/webhooks/events/collections"
 
+  # Storefront + shop
   [[webhooks.subscriptions]]
-  topics = ["themes/create", "themes/update", "themes/publish", "themes/delete"]
+  topics = [ "themes/create", "themes/update", "themes/publish", "themes/delete" ]
   uri = "/webhooks/events/themes"
 
   [[webhooks.subscriptions]]
-  topics = ["shop/update"]
+  topics = [ "shop/update" ]
   uri = "/webhooks/events/shop"
-# Note: orders/*, customers/*, draft_orders/*, fulfillments/* webhooks require
-# protected-customer-data approval from Shopify (done during App Store review).
-# These are omitted from the initial deploy to allow dev-store testing.
+
+  # Customers. Requires Shopify protected-customer-data approval at App Store
+  # review. Dev stores can test these without approval.
+  [[webhooks.subscriptions]]
+  topics = [
+    "customers/create",
+    "customers/update",
+    "customers/delete",
+    "customers/enable",
+    "customers/disable",
+  ]
+  uri = "/webhooks/events/customers"
+
+  # Orders. Same protected-customer-data rule as customers.
+  [[webhooks.subscriptions]]
+  topics = [
+    "orders/create",
+    "orders/updated",
+    "orders/cancelled",
+    "orders/fulfilled",
+    "orders/paid",
+    "orders/partially_fulfilled",
+    "orders/edited",
+    "orders/delete",
+  ]
+  uri = "/webhooks/events/orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "draft_orders/create", "draft_orders/update", "draft_orders/delete" ]
+  uri = "/webhooks/events/draft_orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "fulfillments/create", "fulfillments/update" ]
+  uri = "/webhooks/events/fulfillments"
+
+  [[webhooks.subscriptions]]
+  topics = [ "refunds/create" ]
+  uri = "/webhooks/events/refunds"
+
+  # Discounts. price_rules is the legacy API that still fires for code-based
+  # discounts created in admin. discounts topic covers the automatic discount
+  # surface.
+  [[webhooks.subscriptions]]
+  topics = [ "price_rules/create", "price_rules/update", "price_rules/delete" ]
+  uri = "/webhooks/events/discounts"
+
+  # Locations (warehouses, retail stores, pickup points).
+  [[webhooks.subscriptions]]
+  topics = [
+    "locations/create",
+    "locations/update",
+    "locations/delete",
+    "locations/activate",
+    "locations/deactivate",
+  ]
+  uri = "/webhooks/events/locations"
+
+  # Files uploaded to the merchant's content library.
+  [[webhooks.subscriptions]]
+  topics = [ "files/create", "files/update", "files/delete" ]
+  uri = "/webhooks/events/files"
+
+  # Markets (multi-region selling).
+  [[webhooks.subscriptions]]
+  topics = [ "markets/create", "markets/update", "markets/delete" ]
+  uri = "/webhooks/events/markets"
+
+  # Domains attached to the storefront.
+  [[webhooks.subscriptions]]
+  topics = [ "domains/create", "domains/update", "domains/destroy" ]
+  uri = "/webhooks/events/domains"
 
 [access_scopes]
-scopes = "read_products,read_inventory,read_themes,read_locations,read_content"
+scopes = "read_products,read_inventory,read_themes,read_locations,read_content,read_customers,read_orders,read_draft_orders,read_discounts,read_price_rules,read_files,read_markets"
 use_legacy_install_flow = false
 
 [auth]

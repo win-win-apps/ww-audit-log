@@ -6,31 +6,29 @@ import { getShopSettings, canRecordCategory, type Plan } from "../utils/plan.ser
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
   const settings = await getShopSettings(shop);
-  if (!canRecordCategory(settings.plan as Plan, "fulfillment")) return new Response();
+  if (!canRecordCategory(settings.plan as Plan, "location")) return new Response();
 
   const staff = parseStaff(request.headers, payload);
   const p = payload as any;
-  const orderId = p?.order_id;
-  const status = p?.status;
-  const id = p?.id ? `gid://shopify/Fulfillment/${p.id}` : null;
+  const name = p?.name || `Location ${p?.id ?? ""}`.trim();
+  const id = p?.id ? `gid://shopify/Location/${p.id}` : null;
   const staffName = staff.staffName || "A staff member";
   const topicSlash = topic.toLowerCase().replace(/_/g, "/");
 
   let summary = "";
-  if (topic === "FULFILLMENTS_CREATE") {
-    summary = `${staffName} started fulfillment on order ${orderId}`;
-  } else if (topic === "FULFILLMENTS_UPDATE") {
-    summary = `Fulfillment on order ${orderId} is now ${status || "updated"}`;
-  } else {
-    summary = `Fulfillment on order ${orderId} changed`;
-  }
+  if (topic === "LOCATIONS_CREATE") summary = `${staffName} added location ${name}`;
+  else if (topic === "LOCATIONS_UPDATE") summary = `${staffName} updated location ${name}`;
+  else if (topic === "LOCATIONS_DELETE") summary = `${staffName} removed location ${name}`;
+  else if (topic === "LOCATIONS_ACTIVATE") summary = `${staffName} activated location ${name}`;
+  else if (topic === "LOCATIONS_DEACTIVATE") summary = `${staffName} deactivated location ${name}`;
+  else summary = `${staffName} changed location ${name}`;
 
   await recordEvent({
     shop,
-    category: "fulfillment",
+    category: "location",
     topic: topicSlash,
     resourceId: id,
-    resourceTitle: `Fulfillment ${p?.id || ""}`.trim(),
+    resourceTitle: name,
     staffId: staff.staffId,
     staffName: staff.staffName,
     summary,
