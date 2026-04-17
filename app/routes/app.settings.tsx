@@ -13,7 +13,8 @@ import {
 } from "@shopify/polaris";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
-import { getShopSettings, PLANS, type Plan } from "../utils/plan.server";
+import { getShopSettings } from "../utils/plan.server";
+import { PLANS, type Plan } from "../utils/plan";
 
 const prisma = new PrismaClient();
 

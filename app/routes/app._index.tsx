@@ -20,7 +20,8 @@ import { SearchIcon, XIcon } from "@shopify/polaris-icons";
 import { useEffect, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
-import { getShopSettings, PLANS, CATEGORY_PLAN, type Plan } from "../utils/plan.server";
+import { getShopSettings } from "../utils/plan.server";
+import { PLANS, CATEGORY_PLAN, type Plan } from "../utils/plan";
 
 const prisma = new PrismaClient();
 
