@@ -2,7 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import Papa from "papaparse";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
-import { getShopSettings, type Plan } from "../utils/plan.server";
+import { getShopSettings } from "../utils/plan.server";
 
 const prisma = new PrismaClient();
 
@@ -11,11 +11,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
   const settings = await getShopSettings(shop);
   const url = new URL(request.url);
-  const plan = settings.plan as Plan;
 
-  // Free tier: last 7 days export
-  // Paid / premium: last 365 / retention export
-  const exportDays = plan === "free" ? 7 : Number(url.searchParams.get("days") || settings.retentionDays);
+  // Export matches whatever the merchant can actually see. Free gets the
+  // last N days where N is their retention. Paid gets the requested window
+  // (defaulting to retention, which is effectively unlimited).
+  const requestedDays = Number(url.searchParams.get("days") || settings.retentionDays);
+  const exportDays = Math.min(requestedDays, settings.retentionDays);
   const category = url.searchParams.get("category") || "";
   const since = new Date();
   since.setDate(since.getDate() - exportDays);

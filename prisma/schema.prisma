@@ -65,10 +65,11 @@ model AuditEvent {
 // Per-shop plan + settings
 model ShopSettings {
   shop            String    @id
-  // Plan: free | paid | premium
+  // Plan: free | paid. Legacy rows may carry "premium" from the old 3 tier
+  // pricing; normalisePlan() in app/utils/plan.ts collapses those to "paid".
   plan            String    @default("free")
-  // Retention in days. free: 10, paid: 365, premium: 3650 (effectively unlimited)
-  retentionDays   Int       @default(10)
+  // Retention in days. free: 3, paid: 99999 (unlimited sentinel).
+  retentionDays   Int       @default(3)
   // Email alerts: { enabled, recipients[], categories[] }
   alertsJson      String    @default("{\"enabled\":false,\"recipients\":[],\"categories\":[]}")
   // Onboarding complete flag

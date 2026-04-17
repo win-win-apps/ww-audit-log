@@ -4,47 +4,41 @@
 //
 // Anything that touches Prisma lives in plan.server.ts.
 
-export type Plan = "free" | "paid" | "premium";
+export type Plan = "free" | "paid";
+
+// Sentinel we use to mean "unlimited retention". Anything at or above this
+// value is treated as infinite in the UI. We pick a real number (not
+// Number.MAX_SAFE_INTEGER) so Prisma Int columns can store it cleanly.
+export const UNLIMITED_RETENTION = 99999;
 
 export const PLANS: Record<Plan, { label: string; price: number; retention: number }> = {
-  free: { label: "Free", price: 0, retention: 10 },
-  paid: { label: "Pro", price: 3.99, retention: 365 },
-  premium: { label: "Premium", price: 7.99, retention: 3650 },
+  free: { label: "Free", price: 0, retention: 3 },
+  paid: { label: "Paid", price: 9.99, retention: UNLIMITED_RETENTION },
 };
 
-// Which webhook categories are included in which plan.
-// Coverage tier by plan:
-//   Free    -> catalogue basics: products, inventory
-//   Pro     -> adds ops data: collections, orders, draft orders,
-//              fulfillments, refunds, discounts, locations, files
-//   Premium -> adds security-sensitive surfaces: themes, shop settings,
-//              customers, markets, domains
-export const CATEGORY_PLAN: Record<string, Plan> = {
-  product: "free",
-  inventory: "free",
-  app: "free",
+// Categories are NOT gated by plan anymore. Free and Paid both record
+// everything we know how to record. The only difference is retention:
+// Free keeps a 3 day rolling window, Paid keeps history forever.
+//
+// Kept as an empty record so callers that reference it don't have to
+// change, and so re-introducing gating later is a one line change.
+export const CATEGORY_PLAN: Record<string, Plan> = {};
 
-  collection: "paid",
-  order: "paid",
-  draft_order: "paid",
-  fulfillment: "paid",
-  refund: "paid",
-  discount: "paid",
-  location: "paid",
-  file: "paid",
+export function canRecordCategory(_plan: Plan, _category: string): boolean {
+  // Every plan records every category. Retention is enforced at read + GC time,
+  // not at write time, so even Free users get complete audit coverage for the
+  // trailing 3 days.
+  return true;
+}
 
-  theme: "premium",
-  shop: "premium",
-  customer: "premium",
-  market: "premium",
-  domain: "premium",
-};
+// Normalise whatever the DB hands back into one of our supported plans.
+// Existing rows may still carry "premium" from the old 3 tier pricing, so
+// we collapse them into "paid" on read.
+export function normalisePlan(raw: string | null | undefined): Plan {
+  if (raw === "paid" || raw === "premium") return "paid";
+  return "free";
+}
 
-export function canRecordCategory(plan: Plan, category: string): boolean {
-  const required = CATEGORY_PLAN[category];
-  if (!required) return true;
-  if (required === "free") return true;
-  if (required === "paid") return plan === "paid" || plan === "premium";
-  if (required === "premium") return plan === "premium";
-  return false;
+export function isUnlimited(retentionDays: number): boolean {
+  return retentionDays >= UNLIMITED_RETENTION;
 }

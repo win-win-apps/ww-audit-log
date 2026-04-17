@@ -14,19 +14,14 @@ import {
   List,
 } from "@shopify/polaris";
 import { PrismaClient } from "@prisma/client";
-import { authenticate, PRO_PLAN, PREMIUM_PLAN } from "../shopify.server";
+import { authenticate, PAID_PLAN } from "../shopify.server";
 import { getShopSettings } from "../utils/plan.server";
-import { PLANS, type Plan } from "../utils/plan";
+import { PLANS, UNLIMITED_RETENTION, normalisePlan, isUnlimited, type Plan } from "../utils/plan";
 
 const prisma = new PrismaClient();
 
 // Use test charges on dev stores so we never hit a real card during development.
 const IS_TEST = process.env.NODE_ENV !== "production";
-
-const PLAN_NAME = {
-  paid: PRO_PLAN,
-  premium: PREMIUM_PLAN,
-} as const;
 
 // Build a returnUrl that works whether SHOPIFY_APP_URL is set or not. In local
 // dev the Shopify CLI rotates the tunnel URL every restart, so we prefer the
@@ -43,28 +38,39 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Reconcile local plan state against whatever Shopify says the store is
   // subscribed to. Shopify is the source of truth for active paid subs.
-  let resolvedPlan = settings.plan;
+  let resolvedPlan: Plan = normalisePlan(settings.plan);
+
+  // Opportunistic cleanup: if the DB still has a legacy "premium" string from
+  // the old 3 tier pricing, normalise it to "paid" so downstream reads stop
+  // having to pass through normalisePlan. Safe to run on every load; the
+  // condition rarely fires.
+  if (settings.plan !== resolvedPlan && settings.plan !== "free") {
+    await prisma.shopSettings.update({
+      where: { shop: session.shop },
+      data: { plan: resolvedPlan, retentionDays: PLANS[resolvedPlan].retention },
+    });
+  }
+
   let billingCheckFailed = false;
   try {
     const check = await billing.check({
-      plans: [PRO_PLAN, PREMIUM_PLAN],
+      plans: [PAID_PLAN],
       isTest: IS_TEST,
     });
     if (check.hasActivePayment && check.appSubscriptions.length > 0) {
-      const name = check.appSubscriptions[0].name;
-      const mapped: Plan =
-        name === PREMIUM_PLAN ? "premium" : name === PRO_PLAN ? "paid" : "free";
-      if (mapped !== settings.plan) {
+      // Any active sub means the store is on Paid. We don't branch by name
+      // anymore because there is only one paid tier.
+      if (resolvedPlan !== "paid") {
         await prisma.shopSettings.update({
           where: { shop: session.shop },
           data: {
-            plan: mapped,
-            retentionDays: PLANS[mapped].retention,
+            plan: "paid",
+            retentionDays: PLANS.paid.retention,
           },
         });
-        resolvedPlan = mapped;
+        resolvedPlan = "paid";
       }
-    } else if (settings.plan !== "free") {
+    } else if (resolvedPlan !== "free") {
       // Shopify says no active sub but our DB says paid. Drop to free.
       await prisma.shopSettings.update({
         where: { shop: session.shop },
@@ -80,10 +86,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     billingCheckFailed = true;
   }
 
+  // Also normalise any legacy "premium" rows that snuck through before the
+  // reconcile branch. Safe no op if the row is already free or paid.
+  const storedPlan = normalisePlan(settings.plan);
   const finalSettings =
-    resolvedPlan === settings.plan
-      ? settings
-      : await getShopSettings(session.shop);
+    resolvedPlan === storedPlan
+      ? { ...settings, plan: resolvedPlan }
+      : { ...(await getShopSettings(session.shop)), plan: resolvedPlan };
 
   const url = new URL(request.url);
   const justUpgraded = url.searchParams.get("upgraded");
@@ -92,6 +101,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     plan: finalSettings.plan,
     retentionDays: finalSettings.retentionDays,
     plans: PLANS,
+    unlimited: isUnlimited(finalSettings.retentionDays),
     billingCheckFailed,
     justUpgraded,
   });
@@ -101,18 +111,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, billing } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
-  const target = String(formData.get("plan") || "");
 
-  if (intent === "upgrade" && (target === "paid" || target === "premium")) {
-    const planName = PLAN_NAME[target];
+  if (intent === "upgrade") {
     try {
       // billing.request throws a redirect Response that shopify-app-remix has
       // already wrapped so App Bridge can break out of the embedded iframe to
       // Shopify's charge approval page.
       return await billing.request({
-        plan: planName,
+        plan: PAID_PLAN,
         isTest: IS_TEST,
-        returnUrl: buildReturnUrl(request, target),
+        returnUrl: buildReturnUrl(request, "paid"),
       });
     } catch (err: any) {
       // The thrown redirect Response is the happy path. Only real errors land
@@ -130,7 +138,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "downgrade_free") {
     try {
       const check = await billing.check({
-        plans: [PRO_PLAN, PREMIUM_PLAN],
+        plans: [PAID_PLAN],
         isTest: IS_TEST,
       });
       if (check.hasActivePayment) {
@@ -157,7 +165,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({
       ok: true,
       message:
-        "Switched to Free plan. Events older than 10 days will be cleared on the next daily cleanup.",
+        "Switched to Free plan. Events older than 3 days will be cleared on the next daily cleanup.",
     });
   }
 
@@ -166,34 +174,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 const PLAN_FEATURES: Record<Plan, string[]> = {
   free: [
-    "Product and inventory changes",
-    "10-day history",
-    "CSV export (last 7 days)",
+    "Every admin action tracked (products, orders, customers, themes, shop settings, and more)",
+    "3 day rolling activity history",
+    "CSV export of the visible window",
+    "Filter by type, staff, and keyword",
   ],
   paid: [
     "Everything in Free",
-    "Orders, draft orders, fulfillments, refunds",
-    "Discounts, locations, files, collections",
-    "1 year of history",
-    "Filter by staff",
-    "Full-history CSV export",
-  ],
-  premium: [
-    "Everything in Pro",
-    "Customer changes",
-    "Theme edits and shop settings",
-    "Markets and domains",
-    "10 years of history",
+    "Unlimited activity history, nothing ever falls off",
+    "Backfill up to 1 year of events from Shopify after install",
+    "Full history CSV export",
     "Priority support",
   ],
 };
 
 export default function BillingPage() {
-  const { plan, retentionDays, plans, billingCheckFailed, justUpgraded } =
+  const { plan, retentionDays, plans, unlimited, billingCheckFailed, justUpgraded } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const nav = useNavigation();
   const submitting = nav.state === "submitting";
+
+  const retentionLabel = unlimited
+    ? "unlimited retention"
+    : `${retentionDays} day retention`;
 
   return (
     <Page title="Billing" backAction={{ url: "/app" }}>
@@ -203,7 +207,7 @@ export default function BillingPage() {
             <p>
               Upgrade approved. You are now on the{" "}
               <strong>{plans[plan as Plan].label}</strong> plan with{" "}
-              {retentionDays}-day retention.
+              {unlimited ? "unlimited" : `${retentionDays} day`} history.
             </p>
           </Banner>
         )}
@@ -233,16 +237,20 @@ export default function BillingPage() {
               <Badge tone="info">{plans[plan as Plan].label}</Badge>
             </InlineStack>
             <Text as="p" tone="subdued">
-              {retentionDays}-day event history. Change anytime. Charges are
-              billed through your Shopify invoice, not a separate card.
+              {retentionLabel}. Change anytime. Charges are billed through your
+              Shopify invoice, not a separate card.
             </Text>
           </BlockStack>
         </Card>
 
         <InlineStack gap="400" wrap align="start">
-          {(["free", "paid", "premium"] as Plan[]).map((p) => {
+          {(["free", "paid"] as Plan[]).map((p) => {
             const info = plans[p];
             const current = plan === p;
+            const retentionText =
+              p === "paid" || info.retention >= UNLIMITED_RETENTION
+                ? "Unlimited history"
+                : `${info.retention} day rolling history`;
             return (
               <Box
                 key={p}
@@ -251,7 +259,7 @@ export default function BillingPage() {
                 borderColor={current ? "border-focus" : "border"}
                 borderWidth="025"
                 borderRadius="300"
-                minWidth="260px"
+                minWidth="280px"
               >
                 <BlockStack gap="300">
                   <InlineStack gap="200" blockAlign="center">
@@ -267,6 +275,9 @@ export default function BillingPage() {
                       / month
                     </Text>
                   </Text>
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    {retentionText}
+                  </Text>
                   <List type="bullet">
                     {PLAN_FEATURES[p].map((f) => (
                       <List.Item key={f}>{f}</List.Item>
@@ -279,7 +290,6 @@ export default function BillingPage() {
                         name="intent"
                         value={p === "free" ? "downgrade_free" : "upgrade"}
                       />
-                      <input type="hidden" name="plan" value={p} />
                       <Button
                         submit
                         loading={submitting}

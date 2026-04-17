@@ -11,10 +11,13 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// Billing plans. Names here are the keys billing.request / billing.check use.
-// Keep these in sync with PLANS in app/utils/plan.ts and the App Store listing.
-export const PRO_PLAN = "Pro" as const;
-export const PREMIUM_PLAN = "Premium" as const;
+// Billing plan. Name here is the key billing.request / billing.check use.
+// Keep this in sync with PLANS in app/utils/plan.ts and the App Store listing.
+// Kept under the old PRO_PLAN + PREMIUM_PLAN names so imports elsewhere don't
+// break while we finish the rename; both now point at the single paid tier.
+export const PAID_PLAN = "Paid" as const;
+export const PRO_PLAN = PAID_PLAN;
+export const PREMIUM_PLAN = PAID_PLAN;
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -26,19 +29,10 @@ const shopify = shopifyApp({
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   billing: {
-    [PRO_PLAN]: {
+    [PAID_PLAN]: {
       lineItems: [
         {
-          amount: 3.99,
-          currencyCode: "USD",
-          interval: BillingInterval.Every30Days,
-        },
-      ],
-    },
-    [PREMIUM_PLAN]: {
-      lineItems: [
-        {
-          amount: 7.99,
+          amount: 9.99,
           currencyCode: "USD",
           interval: BillingInterval.Every30Days,
         },

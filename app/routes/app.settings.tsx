@@ -13,21 +13,26 @@ import {
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { getShopSettings } from "../utils/plan.server";
-import { PLANS, type Plan } from "../utils/plan";
+import { PLANS, isUnlimited, normalisePlan } from "../utils/plan";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
 
   return json({
-    plan: settings.plan,
+    plan: normalisePlan(settings.plan),
     retentionDays: settings.retentionDays,
+    unlimited: isUnlimited(settings.retentionDays),
     plans: PLANS,
   });
 };
 
 export default function SettingsPage() {
-  const { plan, retentionDays, plans } = useLoaderData<typeof loader>();
+  const { plan, retentionDays, unlimited, plans } = useLoaderData<typeof loader>();
+
+  const retentionCopy = unlimited
+    ? "Your Paid plan keeps every tracked event forever. Nothing gets auto deleted."
+    : `Events older than ${retentionDays} days are automatically deleted on the Free plan. Upgrade to keep your full history.`;
 
   return (
     <Page title="Settings" backAction={{ url: "/app" }}>
@@ -38,12 +43,12 @@ export default function SettingsPage() {
               <Text as="h2" variant="headingLg">
                 Your plan
               </Text>
-              <Badge tone="info">{plans[plan as Plan].label}</Badge>
+              <Badge tone="info">{plans[plan].label}</Badge>
             </InlineStack>
             <Text as="p" tone="subdued">
-              You are on the {plans[plan as Plan].label} plan with{" "}
-              {retentionDays}-day event history. To change plans or view pricing,
-              go to the Billing page.
+              You are on the {plans[plan].label} plan with{" "}
+              {unlimited ? "unlimited" : `${retentionDays} day`} event history.
+              To change plans or view pricing go to the Billing page.
             </Text>
             <Box>
               <Link to="/app/billing">
@@ -59,8 +64,7 @@ export default function SettingsPage() {
               Data retention
             </Text>
             <Text as="p" tone="subdued">
-              Events older than {retentionDays} days are automatically deleted.
-              Upgrade for longer retention.
+              {retentionCopy}
             </Text>
           </BlockStack>
         </Card>

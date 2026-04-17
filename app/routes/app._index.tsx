@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { getShopSettings } from "../utils/plan.server";
-import { PLANS, CATEGORY_PLAN, type Plan } from "../utils/plan";
+import { PLANS, UNLIMITED_RETENTION, isUnlimited, normalisePlan, type Plan } from "../utils/plan";
 import { humanizeField, humanizeValue } from "../utils/humanize";
 
 const prisma = new PrismaClient();
@@ -57,8 +57,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const dir = url.searchParams.get("dir") === "asc" ? "asc" : "desc";
 
   // Clamp the days filter to the plan's retention. Merchants on Free cant meaningfully
-  // pick Last 90 days because nothing older than 10 is retained. Show a banner in that case.
-  const requestedDays = Number(url.searchParams.get("days") || String(settings.retentionDays));
+  // pick Last 90 days because nothing older than 3 is retained. Show a banner in that case.
+  // Paid plans have "unlimited" retention (sentinel value), so the clamp only bites on Free.
+  const defaultDays = Math.min(settings.retentionDays, 30);
+  const requestedDays = Number(url.searchParams.get("days") || String(defaultDays));
   const effectiveDays = Math.min(requestedDays, settings.retentionDays);
 
   const since = new Date();
@@ -97,10 +99,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalEvents,
     staffOptions: distinctStaff.map((s) => s.staffName).filter(Boolean) as string[],
     settings: {
-      plan: settings.plan,
+      plan: normalisePlan(settings.plan),
       retentionDays: settings.retentionDays,
+      unlimited: isUnlimited(settings.retentionDays),
     },
-    planLabel: PLANS[(settings.plan as Plan) || "free"].label,
+    planLabel: PLANS[normalisePlan(settings.plan)].label,
     filters: {
       category,
       staff,
@@ -364,28 +367,25 @@ export default function TimelinePage() {
 
   // Only show time-range chips up to the plan retention. Capping them
   // avoids showing merchants ranges that will always return empty.
+  // Paid = unlimited, so every option is available. Free = 3 days, so
+  // only the shortest window survives the filter.
   const allDayOptions = [
     { label: "Last 24 hours", value: "1" },
+    { label: "Last 3 days", value: "3" },
     { label: "Last 7 days", value: "7" },
-    { label: "Last 10 days", value: "10" },
     { label: "Last 30 days", value: "30" },
     { label: "Last 90 days", value: "90" },
     { label: "Last year", value: "365" },
+    { label: "All time", value: String(UNLIMITED_RETENTION) },
   ];
   const daysOptions = allDayOptions.filter((o) => Number(o.value) <= settings.retentionDays);
 
+  // No category gating anymore. Every plan can see every category.
   const categoryOptions = [
-    { label: "All categories", value: "", gated: false },
+    { label: "All categories", value: "" },
     ...Object.entries(CATEGORY_META).map(([k, v]) => ({
       label: v.label,
       value: k,
-      gated:
-        CATEGORY_PLAN[k] &&
-        CATEGORY_PLAN[k] !== "free" &&
-        !(
-          settings.plan === "premium" ||
-          (settings.plan === "paid" && CATEGORY_PLAN[k] === "paid")
-        ),
     })),
   ];
 
@@ -415,11 +415,11 @@ export default function TimelinePage() {
         {settings.plan === "free" && (
           <Banner title={`You are on the ${planLabel} plan`} tone="info">
             <Text as="p">
-              Tracking products and inventory changes. {settings.retentionDays}-day history.
+              Tracking every admin action on your store. Free keeps a {settings.retentionDays} day rolling window.
             </Text>
             <Box paddingBlockStart="200">
-              <Link to="/app/settings">
-                Upgrade to track collections, themes and shop settings, and keep a full year of history.
+              <Link to="/app/billing">
+                Upgrade to Paid for unlimited history and backfill up to a year of past events.
               </Link>
             </Box>
           </Banner>
@@ -430,7 +430,7 @@ export default function TimelinePage() {
             <Text as="p">
               Your {planLabel} plan stores the last {settings.retentionDays} days. Older events are not retained.
               Showing the last {filters.effectiveDays} days.{" "}
-              <Link to="/app/settings">Upgrade for longer retention.</Link>
+              <Link to="/app/billing">Upgrade for unlimited retention.</Link>
             </Text>
           </Banner>
         )}
@@ -471,9 +471,8 @@ export default function TimelinePage() {
                     onClick={() => setParam("category", opt.value || null)}
                     size="slim"
                     variant="tertiary"
-                    disabled={!!opt.gated}
                   >
-                    {opt.label}{opt.gated ? " (upgrade)" : ""}
+                    {opt.label}
                   </Button>
                 ))}
               </InlineStack>
@@ -497,14 +496,8 @@ export default function TimelinePage() {
                   />
                 </Box>
 
-                {/* Staff filter is gated behind Pro. On Free it just shows a disabled hint. */}
-                {settings.plan === "free" ? (
-                  <Box>
-                    <Button disabled size="slim" variant="tertiary">
-                      Filter by staff (upgrade)
-                    </Button>
-                  </Box>
-                ) : staffOptions.length > 0 ? (
+                {/* Staff filter is always on now. Both plans get full filtering. */}
+                {staffOptions.length > 0 ? (
                   <InlineStack gap="100" wrap>
                     <Text as="span" variant="bodySm" tone="subdued">Staff:</Text>
                     <Button
@@ -579,8 +572,8 @@ export default function TimelinePage() {
 
         {settings.plan === "free" && (
           <Text as="p" variant="bodySm" tone="subdued" alignment="center">
-            Free plan exports include the last 7 days.{" "}
-            <Link to="/app/settings">Upgrade for full-history CSV export.</Link>
+            Free keeps the last {settings.retentionDays} days. CSV export matches the visible window.{" "}
+            <Link to="/app/billing">Upgrade for unlimited history and backfill.</Link>
           </Text>
         )}
       </BlockStack>
