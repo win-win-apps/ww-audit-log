@@ -15,6 +15,7 @@ import {
   Box,
   TextField,
   Icon,
+  Thumbnail,
 } from "@shopify/polaris";
 import { SearchIcon, XIcon } from "@shopify/polaris-icons";
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +27,15 @@ import { humanizeField, humanizeValue } from "../utils/humanize";
 
 const prisma = new PrismaClient();
 
-const SORT_KEYS = ["type", "what", "before", "after", "who", "when"] as const;
+const SORT_KEYS = [
+  "type",
+  "item",
+  "what",
+  "before",
+  "after",
+  "who",
+  "when",
+] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -170,6 +179,8 @@ export default function TimelinePage() {
   type Row = {
     id: string;
     category: string;
+    itemLabel: string;
+    thumbnail: string | null;
     whatChanged: string;
     before: string;
     after: string;
@@ -188,32 +199,43 @@ export default function TimelinePage() {
         if (Array.isArray(raw)) parsedDiff = raw;
       } catch { /* ignore */ }
 
-      // Old inventory rows have no diff entry but rawJson holds the count.
-      if (
-        parsedDiff.length === 0 &&
-        e.topic.startsWith("inventory_levels")
-      ) {
-        try {
-          const raw = JSON.parse(e.rawJson || "{}");
-          if (typeof raw.available === "number") {
-            parsedDiff = [{ field: "inventory", before: null, after: raw.available }];
-          }
-        } catch { /* ignore */ }
-      }
+      // Pull the thumbnail URL out of rawJson. For products the webhook
+      // payload carries `image.src` and `images[0].src`; either works.
+      let thumbnail: string | null = null;
+      try {
+        const raw = JSON.parse(e.rawJson || "{}");
+        thumbnail =
+          raw?.image?.src ||
+          raw?.featured_image?.src ||
+          raw?.images?.[0]?.src ||
+          null;
 
-      const itemLabel =
-        e.resourceTitle && !e.resourceTitle.startsWith("Inventory item ")
-          ? e.resourceTitle
-          : null;
+        // Old inventory rows have no diff entry but rawJson holds the count.
+        if (
+          parsedDiff.length === 0 &&
+          e.topic.startsWith("inventory_levels") &&
+          typeof raw?.available === "number"
+        ) {
+          parsedDiff = [{ field: "inventory", before: null, after: raw.available }];
+        }
+      } catch { /* ignore */ }
+
+      // Inventory items dont have a human name in the payload, so the stored
+      // resourceTitle is "Inventory item 47831...". Hide that from the UI.
+      const isInventoryPlaceholder =
+        e.resourceTitle?.startsWith("Inventory item ") ?? false;
+      const itemLabel = isInventoryPlaceholder
+        ? ""
+        : e.resourceTitle || "";
 
       if (parsedDiff.length > 0) {
         parsedDiff.forEach((d, idx) => {
-          const label = humanizeField(d.field);
-          const whatChanged = itemLabel ? `${label} of ${itemLabel}` : label;
           out.push({
             id: `${e.id}:${idx}`,
             category: e.category,
-            whatChanged,
+            itemLabel,
+            thumbnail,
+            whatChanged: humanizeField(d.field),
             before: humanizeValue(d.field, d.before),
             after: humanizeValue(d.field, d.after),
             staffName: e.staffName,
@@ -227,11 +249,12 @@ export default function TimelinePage() {
         let action = "Updated";
         if (e.topic.endsWith("/create")) action = "Created";
         else if (e.topic.endsWith("/delete")) action = "Deleted";
-        const whatChanged = itemLabel ? `${action} ${itemLabel}` : action;
         out.push({
           id: e.id,
           category: e.category,
-          whatChanged,
+          itemLabel,
+          thumbnail,
+          whatChanged: action,
           before: "",
           after: "",
           staffName: e.staffName,
@@ -251,6 +274,8 @@ export default function TimelinePage() {
       switch (sort.key) {
         case "type":
           return a.category.localeCompare(b.category) * mult;
+        case "item":
+          return a.itemLabel.localeCompare(b.itemLabel) * mult;
         case "what":
           return a.whatChanged.localeCompare(b.whatChanged) * mult;
         case "before":
@@ -280,6 +305,22 @@ export default function TimelinePage() {
       <IndexTable.Row id={r.id} key={r.id} position={i}>
         <IndexTable.Cell>
           <Badge tone={meta.tone}>{meta.label}</Badge>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          {r.itemLabel ? (
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
+              <Thumbnail
+                source={r.thumbnail || ""}
+                alt={r.itemLabel}
+                size="extraSmall"
+              />
+              <Text as="span" variant="bodyMd">{r.itemLabel}</Text>
+            </InlineStack>
+          ) : (
+            <Text as="span" variant="bodySm" tone="subdued">
+              {""}
+            </Text>
+          )}
         </IndexTable.Cell>
         <IndexTable.Cell>
           <Text as="span" variant="bodyMd">{r.whatChanged}</Text>
@@ -505,14 +546,15 @@ export default function TimelinePage() {
               selectable={false}
               headings={[
                 { title: "Type" },
+                { title: "Item" },
                 { title: "What changed" },
                 { title: "Before" },
                 { title: "After" },
                 { title: "Who" },
                 { title: "When" },
               ]}
-              sortable={[true, true, true, true, true, true]}
-              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 5}
+              sortable={[true, true, true, true, true, true, true]}
+              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 6}
               sortDirection={sortDirection}
               onSort={onSort}
               defaultSortDirection="descending"
