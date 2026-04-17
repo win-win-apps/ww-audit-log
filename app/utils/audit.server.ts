@@ -68,10 +68,14 @@ function scrubPII(value: any): any {
 }
 
 // Trim a raw payload to <= 8k bytes to cap storage cost.
-// Also scrubs well-known PII keys before serializing.
-export function trimRaw(raw: any): string {
-  const scrubbed = scrubPII(raw ?? {});
-  const s = JSON.stringify(scrubbed);
+// Also scrubs well-known PII keys before serializing, unless skipScrub is
+// true. Shop/update payloads contain the merchant's own contact info
+// (their email, phone, business address). Those aren't customer PII and
+// are literally the thing we're auditing, so the shop handler passes
+// skipScrub=true.
+export function trimRaw(raw: any, skipScrub = false): string {
+  const payload = skipScrub ? (raw ?? {}) : scrubPII(raw ?? {});
+  const s = JSON.stringify(payload);
   if (s.length <= 8000) return s;
   return s.slice(0, 7980) + "…[trimmed]";
 }
@@ -94,6 +98,7 @@ interface RecordOpts {
   summary: string;
   diff?: Array<{ field: string; before: any; after: any }>;
   raw?: any;
+  skipRawScrub?: boolean;
 }
 
 export async function recordEvent(opts: RecordOpts) {
@@ -109,7 +114,7 @@ export async function recordEvent(opts: RecordOpts) {
         staffName: opts.staffName ?? null,
         summary: opts.summary,
         diffJson: JSON.stringify(opts.diff ?? []),
-        rawJson: trimRaw(opts.raw),
+        rawJson: trimRaw(opts.raw, opts.skipRawScrub === true),
       },
     });
   } catch (err) {
@@ -149,4 +154,70 @@ export function getPrevSnapshot(shop: string, id: string): any | undefined {
 }
 export function setPrevSnapshot(shop: string, id: string, snap: any) {
   productSnapshotCache.set(`${shop}:${id}`, snap);
+}
+
+// Shop-level snapshot cache. Same shape as products: keep the last seen
+// shop/update payload so the next one can diff against it. Keyed purely by
+// shop domain since there's only one shop record per store.
+const shopSnapshotCache = new Map<string, any>();
+export function getPrevShopSnapshot(shop: string): any | undefined {
+  return shopSnapshotCache.get(shop);
+}
+export function setPrevShopSnapshot(shop: string, snap: any) {
+  shopSnapshotCache.set(shop, snap);
+}
+
+// Whitelist of shop-settings fields we track. Anything not in here is ignored
+// even if it changed, because Shopify fires shop/update on lots of internal
+// state the merchant never sees. This list covers the Settings → General,
+// Settings → Taxes, and Settings → Checkout screens.
+const SHOP_DIFF_FIELDS = [
+  "name",
+  "email",
+  "customer_email",
+  "phone",
+  "domain",
+  "myshopify_domain",
+  "address1",
+  "address2",
+  "city",
+  "zip",
+  "province",
+  "province_code",
+  "country",
+  "country_code",
+  "country_name",
+  "currency",
+  "money_format",
+  "money_with_currency_format",
+  "weight_unit",
+  "timezone",
+  "iana_timezone",
+  "primary_locale",
+  "taxes_included",
+  "tax_shipping",
+  "county_taxes",
+  "password_enabled",
+  "has_storefront",
+  "checkout_api_supported",
+  "force_ssl",
+  "plan_name",
+  "plan_display_name",
+  "shop_owner",
+];
+
+// Compare two shop/update payloads and emit diff entries for whitelisted fields.
+export function diffShop(before: any, after: any): Array<{ field: string; before: any; after: any }> {
+  const diff: Array<{ field: string; before: any; after: any }> = [];
+  if (!before || !after) return diff;
+  for (const f of SHOP_DIFF_FIELDS) {
+    const b = before[f];
+    const a = after[f];
+    // Treat null, undefined and "" as the same "empty" state so we don't
+    // fire a fake change the first time a field is saved as blank.
+    const bNorm = b === null || b === undefined ? "" : b;
+    const aNorm = a === null || a === undefined ? "" : a;
+    if (bNorm !== aNorm) diff.push({ field: `shop.${f}`, before: b, after: a });
+  }
+  return diff;
 }

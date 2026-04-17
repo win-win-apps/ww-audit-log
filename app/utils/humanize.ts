@@ -18,6 +18,40 @@ const FIELD_LABELS: Record<string, string> = {
   inventory_quantity: "Inventory",
   available: "Inventory",
   name: "Name",
+  // Shop-level settings. All prefixed with `shop.` in the diff paths so they
+  // don't collide with product field names.
+  "shop.name": "Store name",
+  "shop.email": "Contact email",
+  "shop.customer_email": "Customer-facing email",
+  "shop.phone": "Store phone",
+  "shop.domain": "Primary domain",
+  "shop.myshopify_domain": "Shopify domain",
+  "shop.address1": "Store address",
+  "shop.address2": "Store address line 2",
+  "shop.city": "City",
+  "shop.zip": "Postal code",
+  "shop.province": "State or province",
+  "shop.province_code": "State or province code",
+  "shop.country": "Country",
+  "shop.country_code": "Country code",
+  "shop.country_name": "Country",
+  "shop.currency": "Currency",
+  "shop.money_format": "Money format",
+  "shop.money_with_currency_format": "Money format with currency",
+  "shop.weight_unit": "Weight unit",
+  "shop.timezone": "Timezone",
+  "shop.iana_timezone": "Timezone",
+  "shop.primary_locale": "Primary language",
+  "shop.taxes_included": "Taxes included in prices",
+  "shop.tax_shipping": "Charge tax on shipping",
+  "shop.county_taxes": "County taxes",
+  "shop.password_enabled": "Storefront password",
+  "shop.has_storefront": "Storefront enabled",
+  "shop.checkout_api_supported": "Checkout API",
+  "shop.force_ssl": "Force SSL",
+  "shop.plan_name": "Shopify plan",
+  "shop.plan_display_name": "Shopify plan",
+  "shop.shop_owner": "Store owner",
 };
 
 // "Default Title" is Shopify's stand-in for a product that has only one
@@ -43,6 +77,13 @@ export function humanizeField(field: string): string {
     const attrLabel = FIELD_LABELS[attr] || titleCase(attr);
     if (isDefaultVariantLabel(variantLabel)) return attrLabel;
     return `${attrLabel} (${variantLabel})`;
+  }
+
+  // shop.{field} — exact match first (so "shop.address1" → "Store address"),
+  // fall through to title-casing the final segment.
+  if (parts[0] === "shop" && parts.length === 2) {
+    if (FIELD_LABELS[field]) return FIELD_LABELS[field];
+    return titleCase(parts[1]);
   }
 
   // exact match
@@ -122,6 +163,19 @@ export function friendlySummary(opts: {
   }
 
   if (topic.endsWith("/update")) {
+    // Shop updates get slightly different phrasing — "shop settings" reads
+    // better than "the shop settings" and there's no per-resource title.
+    if (topic.startsWith("shop/")) {
+      if (diff.length === 1) {
+        const label = humanizeField(diff[0].field).toLowerCase();
+        return `${staff} changed the ${label}`;
+      }
+      if (diff.length > 1) {
+        return `${staff} made ${diff.length} changes to shop settings`;
+      }
+      return `${staff} updated shop settings`;
+    }
+
     if (diff.length === 1) {
       const label = humanizeField(diff[0].field).toLowerCase();
       return `${staff} changed the ${label} on ${title}`;

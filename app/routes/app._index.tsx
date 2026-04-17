@@ -309,11 +309,13 @@ export default function TimelinePage() {
         <IndexTable.Cell>
           {r.itemLabel ? (
             <InlineStack gap="200" blockAlign="center" wrap={false}>
-              <Thumbnail
-                source={r.thumbnail || ""}
-                alt={r.itemLabel}
-                size="extraSmall"
-              />
+              {r.thumbnail ? (
+                <Thumbnail
+                  source={r.thumbnail}
+                  alt={r.itemLabel}
+                  size="extraSmall"
+                />
+              ) : null}
               <Text as="span" variant="bodyMd">{r.itemLabel}</Text>
             </InlineStack>
           ) : (
