@@ -9,34 +9,25 @@ import {
   Badge,
   BlockStack,
   InlineStack,
-  InlineGrid,
   EmptyState,
   Button,
   Banner,
   Box,
   TextField,
   Icon,
-  Divider,
 } from "@shopify/polaris";
 import { SearchIcon, XIcon } from "@shopify/polaris-icons";
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { getShopSettings } from "../utils/plan.server";
 import { PLANS, CATEGORY_PLAN, type Plan } from "../utils/plan";
-import { humanizeField, humanizeValue, friendlySummary } from "../utils/humanize";
+import { humanizeField, humanizeValue } from "../utils/humanize";
 
 const prisma = new PrismaClient();
 
-const SORT_KEYS = ["type", "event", "who", "when"] as const;
+const SORT_KEYS = ["type", "what", "before", "after", "who", "when"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
-
-function orderByFor(sort: SortKey, dir: "asc" | "desc"): any {
-  if (sort === "type") return { category: dir };
-  if (sort === "who") return { staffName: dir };
-  if (sort === "event") return { summary: dir };
-  return { createdAt: dir };
-}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -48,7 +39,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const staff = url.searchParams.get("staff") || "";
   const q = url.searchParams.get("q") || "";
 
-  // Sorting
+  // Sorting. We fetch events ordered by createdAt desc (newest first) so we
+  // always retrieve the freshest 100 regardless of UI sort. Column-level sort
+  // is applied client-side after flattening, so columns like "Before" / "After"
+  // (which aren't DB columns) can sort too.
   const rawSort = url.searchParams.get("sort") as SortKey | null;
   const sort: SortKey = rawSort && SORT_KEYS.includes(rawSort) ? rawSort : "when";
   const dir = url.searchParams.get("dir") === "asc" ? "asc" : "desc";
@@ -74,7 +68,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const [events, totalEvents, distinctStaff] = await Promise.all([
     prisma.auditEvent.findMany({
       where,
-      orderBy: orderByFor(sort, dir as "asc" | "desc"),
+      orderBy: { createdAt: "desc" },
       take: 100,
     }),
     prisma.auditEvent.count({ where: { shop } }),
@@ -169,107 +163,146 @@ export default function TimelinePage() {
     setSearchParams(next, { replace: true });
   };
 
-  const rows = events.map((e, i) => {
-    const meta = CATEGORY_META[e.category] || { tone: undefined, label: e.category };
+  // Flatten events into one row per field change. An event with 3 diff entries
+  // produces 3 rows (all sharing Who / When / Type). Events with no diff
+  // (creates, deletes, updates with no captured diff) produce one row with an
+  // action phrase in "What changed" and empty Before / After.
+  type Row = {
+    id: string;
+    category: string;
+    whatChanged: string;
+    before: string;
+    after: string;
+    staffName: string | null;
+    createdAt: string;
+    sortBefore: string;
+    sortAfter: string;
+  };
 
-    // diffJson is stored as a string so we have to parse each time. If it ever
-    // fails (bad webhook payload, schema drift) fall back to an empty list so
-    // the row still renders the summary cleanly.
-    let parsedDiff: Array<{ field: string; before: unknown; after: unknown }> = [];
-    try {
-      const raw = JSON.parse(e.diffJson || "[]");
-      if (Array.isArray(raw)) parsedDiff = raw;
-    } catch {
-      parsedDiff = [];
-    }
-
-    // For inventory_levels events, the diff the old webhook handler stored is
-    // empty, but rawJson has the `available` count. Pull it so the rebuilt
-    // summary can say "set inventory to N units" instead of just "updated
-    // inventory". New rows are already recorded with a proper diff entry.
-    let inventoryAvailable: number | null = null;
-    if (e.topic.startsWith("inventory_levels")) {
+  const flat: Row[] = useMemo(() => {
+    const out: Row[] = [];
+    for (const e of events) {
+      let parsedDiff: Array<{ field: string; before: unknown; after: unknown }> = [];
       try {
-        const raw = JSON.parse(e.rawJson || "{}");
-        if (typeof raw.available === "number") inventoryAvailable = raw.available;
-      } catch {
-        /* ignore */
+        const raw = JSON.parse(e.diffJson || "[]");
+        if (Array.isArray(raw)) parsedDiff = raw;
+      } catch { /* ignore */ }
+
+      // Old inventory rows have no diff entry but rawJson holds the count.
+      if (
+        parsedDiff.length === 0 &&
+        e.topic.startsWith("inventory_levels")
+      ) {
+        try {
+          const raw = JSON.parse(e.rawJson || "{}");
+          if (typeof raw.available === "number") {
+            parsedDiff = [{ field: "inventory", before: null, after: raw.available }];
+          }
+        } catch { /* ignore */ }
+      }
+
+      const itemLabel =
+        e.resourceTitle && !e.resourceTitle.startsWith("Inventory item ")
+          ? e.resourceTitle
+          : null;
+
+      if (parsedDiff.length > 0) {
+        parsedDiff.forEach((d, idx) => {
+          const label = humanizeField(d.field);
+          const whatChanged = itemLabel ? `${label} of ${itemLabel}` : label;
+          out.push({
+            id: `${e.id}:${idx}`,
+            category: e.category,
+            whatChanged,
+            before: humanizeValue(d.field, d.before),
+            after: humanizeValue(d.field, d.after),
+            staffName: e.staffName,
+            createdAt: e.createdAt,
+            sortBefore: String(d.before ?? ""),
+            sortAfter: String(d.after ?? ""),
+          });
+        });
+      } else {
+        // No diff. Describe the action instead.
+        let action = "Updated";
+        if (e.topic.endsWith("/create")) action = "Created";
+        else if (e.topic.endsWith("/delete")) action = "Deleted";
+        const whatChanged = itemLabel ? `${action} ${itemLabel}` : action;
+        out.push({
+          id: e.id,
+          category: e.category,
+          whatChanged,
+          before: "",
+          after: "",
+          staffName: e.staffName,
+          createdAt: e.createdAt,
+          sortBefore: "",
+          sortAfter: "",
+        });
       }
     }
+    return out;
+  }, [events]);
 
-    // Rebuild the summary client-side for display. This handles old rows that
-    // were recorded before the server-side summary was humanized. For rows
-    // where we can't derive anything cleaner, fall back to the stored summary.
-    const rebuilt = friendlySummary({
-      topic: e.topic,
-      staffName: e.staffName,
-      resourceTitle: e.resourceTitle,
-      diff: parsedDiff,
-      inventoryAvailable,
+  const sortedRows = useMemo(() => {
+    const copy = [...flat];
+    const mult = sort.dir === "asc" ? 1 : -1;
+    copy.sort((a, b) => {
+      switch (sort.key) {
+        case "type":
+          return a.category.localeCompare(b.category) * mult;
+        case "what":
+          return a.whatChanged.localeCompare(b.whatChanged) * mult;
+        case "before":
+          return a.sortBefore.localeCompare(b.sortBefore, undefined, {
+            numeric: true,
+          }) * mult;
+        case "after":
+          return a.sortAfter.localeCompare(b.sortAfter, undefined, {
+            numeric: true,
+          }) * mult;
+        case "who":
+          return (a.staffName || "").localeCompare(b.staffName || "") * mult;
+        case "when":
+        default:
+          return (
+            (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) *
+            mult
+          );
+      }
     });
-    const displaySummary = rebuilt || e.summary;
+    return copy;
+  }, [flat, sort.key, sort.dir]);
 
+  const rows = sortedRows.map((r, i) => {
+    const meta = CATEGORY_META[r.category] || { tone: undefined, label: r.category };
     return (
-      <IndexTable.Row id={e.id} key={e.id} position={i}>
+      <IndexTable.Row id={r.id} key={r.id} position={i}>
         <IndexTable.Cell>
           <Badge tone={meta.tone}>{meta.label}</Badge>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <BlockStack gap="200">
-            <Text as="span" variant="bodyMd">{displaySummary}</Text>
-
-            {parsedDiff.length > 0 && (
-              <Box
-                background="bg-surface-secondary"
-                padding="300"
-                borderRadius="200"
-              >
-                <BlockStack gap="200">
-                  <InlineGrid
-                    columns={["oneThird", "oneThird", "oneThird"]}
-                    gap="200"
-                  >
-                    <Text as="span" variant="bodySm" fontWeight="semibold">
-                      What changed
-                    </Text>
-                    <Text as="span" variant="bodySm" fontWeight="semibold">
-                      Before
-                    </Text>
-                    <Text as="span" variant="bodySm" fontWeight="semibold">
-                      After
-                    </Text>
-                  </InlineGrid>
-                  <Divider />
-                  {parsedDiff.map((d, idx) => (
-                    <Fragment key={idx}>
-                      <InlineGrid
-                        columns={["oneThird", "oneThird", "oneThird"]}
-                        gap="200"
-                      >
-                        <Text as="span" variant="bodySm" fontWeight="medium">
-                          {humanizeField(d.field)}
-                        </Text>
-                        <Text as="span" variant="bodySm" tone="subdued">
-                          {humanizeValue(d.field, d.before)}
-                        </Text>
-                        <Text as="span" variant="bodySm">
-                          {humanizeValue(d.field, d.after)}
-                        </Text>
-                      </InlineGrid>
-                    </Fragment>
-                  ))}
-                </BlockStack>
-              </Box>
-            )}
-          </BlockStack>
+          <Text as="span" variant="bodyMd">{r.whatChanged}</Text>
         </IndexTable.Cell>
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
-            {e.staffName || "A staff member"}
+            {r.before || ""}
           </Text>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">{relativeTime(e.createdAt)}</Text>
+          <Text as="span" variant="bodySm">
+            {r.after || ""}
+          </Text>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Text as="span" variant="bodySm" tone="subdued">
+            {r.staffName || "A staff member"}
+          </Text>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Text as="span" variant="bodySm" tone="subdued">
+            {relativeTime(r.createdAt)}
+          </Text>
         </IndexTable.Cell>
       </IndexTable.Row>
     );
@@ -467,17 +500,19 @@ export default function TimelinePage() {
             )
           ) : (
             <IndexTable
-              resourceName={{ singular: "event", plural: "events" }}
-              itemCount={events.length}
+              resourceName={{ singular: "change", plural: "changes" }}
+              itemCount={sortedRows.length}
               selectable={false}
               headings={[
                 { title: "Type" },
-                { title: "Event" },
+                { title: "What changed" },
+                { title: "Before" },
+                { title: "After" },
                 { title: "Who" },
                 { title: "When" },
               ]}
-              sortable={[true, true, true, true]}
-              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 3}
+              sortable={[true, true, true, true, true, true]}
+              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 5}
               sortDirection={sortDirection}
               onSort={onSort}
               defaultSortDirection="descending"
