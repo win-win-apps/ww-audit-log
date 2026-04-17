@@ -16,10 +16,9 @@ import {
   Box,
   TextField,
   Icon,
-  Collapsible,
   Divider,
 } from "@shopify/polaris";
-import { SearchIcon, XIcon, ChevronDownIcon, ChevronUpIcon } from "@shopify/polaris-icons";
+import { SearchIcon, XIcon } from "@shopify/polaris-icons";
 import { Fragment, useEffect, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -142,11 +141,6 @@ export default function TimelinePage() {
   const [searchInput, setSearchInput] = useState<string>(filters.q);
   useEffect(() => setSearchInput(filters.q), [filters.q]);
 
-  // Which row is currently expanded to show its full diff. Only one at a time,
-  // both to keep the page readable and because most merchants will click one,
-  // glance, and click another.
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams);
     if (!value) next.delete(key);
@@ -177,11 +171,10 @@ export default function TimelinePage() {
 
   const rows = events.map((e, i) => {
     const meta = CATEGORY_META[e.category] || { tone: undefined, label: e.category };
-    const isOpen = expandedId === e.id;
 
     // diffJson is stored as a string so we have to parse each time. If it ever
     // fails (bad webhook payload, schema drift) fall back to an empty list so
-    // the row still expands and just shows the metadata.
+    // the row still renders the summary cleanly.
     let parsedDiff: Array<{ field: string; before: unknown; after: unknown }> = [];
     try {
       const raw = JSON.parse(e.diffJson || "[]");
@@ -190,119 +183,84 @@ export default function TimelinePage() {
       parsedDiff = [];
     }
 
+    // For inventory_levels events, the diff the old webhook handler stored is
+    // empty, but rawJson has the `available` count. Pull it so the rebuilt
+    // summary can say "set inventory to N units" instead of just "updated
+    // inventory". New rows are already recorded with a proper diff entry.
+    let inventoryAvailable: number | null = null;
+    if (e.topic.startsWith("inventory_levels")) {
+      try {
+        const raw = JSON.parse(e.rawJson || "{}");
+        if (typeof raw.available === "number") inventoryAvailable = raw.available;
+      } catch {
+        /* ignore */
+      }
+    }
+
     // Rebuild the summary client-side for display. This handles old rows that
-    // were recorded before the server-side summary was humanized (e.g. the
-    // ones with "variant.Default Title.price" baked in). For rows where we
-    // can't derive anything cleaner, fall back to the stored summary.
+    // were recorded before the server-side summary was humanized. For rows
+    // where we can't derive anything cleaner, fall back to the stored summary.
     const rebuilt = friendlySummary({
       topic: e.topic,
       staffName: e.staffName,
       resourceTitle: e.resourceTitle,
       diff: parsedDiff,
+      inventoryAvailable,
     });
     const displaySummary = rebuilt || e.summary;
 
     return (
-      <IndexTable.Row
-        id={e.id}
-        key={e.id}
-        position={i}
-        onClick={() => setExpandedId(isOpen ? null : e.id)}
-      >
+      <IndexTable.Row id={e.id} key={e.id} position={i}>
         <IndexTable.Cell>
           <Badge tone={meta.tone}>{meta.label}</Badge>
         </IndexTable.Cell>
         <IndexTable.Cell>
           <BlockStack gap="200">
-            <InlineStack gap="200" blockAlign="center" wrap={false}>
-              <Text as="span" variant="bodyMd">{displaySummary}</Text>
-              <Box>
-                <Icon
-                  source={isOpen ? ChevronUpIcon : ChevronDownIcon}
-                  tone="subdued"
-                />
-              </Box>
-            </InlineStack>
-            <Collapsible
-              open={isOpen}
-              id={`event-detail-${e.id}`}
-              transition={{ duration: "150ms", timingFunction: "ease-in-out" }}
-            >
-              <Box paddingBlockStart="200">
-                <BlockStack gap="300">
-                  {/* Simple meta line, no webhook jargon, no GIDs. */}
-                  <InlineStack gap="400" wrap>
-                    {e.resourceTitle && (
-                      <Text as="span" variant="bodySm" tone="subdued">
-                        <Text as="span" variant="bodySm" fontWeight="semibold">
-                          Item:{" "}
-                        </Text>
-                        {e.resourceTitle}
-                      </Text>
-                    )}
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      <Text as="span" variant="bodySm" fontWeight="semibold">
-                        When:{" "}
-                      </Text>
-                      {new Date(e.createdAt).toLocaleString()}
-                    </Text>
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      <Text as="span" variant="bodySm" fontWeight="semibold">
-                        Who:{" "}
-                      </Text>
-                      {e.staffName || "A staff member"}
-                    </Text>
-                  </InlineStack>
+            <Text as="span" variant="bodyMd">{displaySummary}</Text>
 
-                  {parsedDiff.length > 0 ? (
-                    <Box
-                      background="bg-surface-secondary"
-                      padding="300"
-                      borderRadius="200"
-                    >
-                      <BlockStack gap="200">
-                        {/* Mini three-column table: What changed / Before / After */}
-                        <InlineGrid columns={["oneThird", "oneThird", "oneThird"]} gap="200">
-                          <Text as="span" variant="bodySm" fontWeight="semibold">
-                            What changed
-                          </Text>
-                          <Text as="span" variant="bodySm" fontWeight="semibold">
-                            Before
-                          </Text>
-                          <Text as="span" variant="bodySm" fontWeight="semibold">
-                            After
-                          </Text>
-                        </InlineGrid>
-                        <Divider />
-                        {parsedDiff.map((d, idx) => (
-                          <Fragment key={idx}>
-                            <InlineGrid
-                              columns={["oneThird", "oneThird", "oneThird"]}
-                              gap="200"
-                            >
-                              <Text as="span" variant="bodySm" fontWeight="medium">
-                                {humanizeField(d.field)}
-                              </Text>
-                              <Text as="span" variant="bodySm" tone="subdued">
-                                {humanizeValue(d.field, d.before)}
-                              </Text>
-                              <Text as="span" variant="bodySm">
-                                {humanizeValue(d.field, d.after)}
-                              </Text>
-                            </InlineGrid>
-                          </Fragment>
-                        ))}
-                      </BlockStack>
-                    </Box>
-                  ) : (
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      No field-level details were captured for this event. This
-                      is normal for newly created or deleted items.
+            {parsedDiff.length > 0 && (
+              <Box
+                background="bg-surface-secondary"
+                padding="300"
+                borderRadius="200"
+              >
+                <BlockStack gap="200">
+                  <InlineGrid
+                    columns={["oneThird", "oneThird", "oneThird"]}
+                    gap="200"
+                  >
+                    <Text as="span" variant="bodySm" fontWeight="semibold">
+                      What changed
                     </Text>
-                  )}
+                    <Text as="span" variant="bodySm" fontWeight="semibold">
+                      Before
+                    </Text>
+                    <Text as="span" variant="bodySm" fontWeight="semibold">
+                      After
+                    </Text>
+                  </InlineGrid>
+                  <Divider />
+                  {parsedDiff.map((d, idx) => (
+                    <Fragment key={idx}>
+                      <InlineGrid
+                        columns={["oneThird", "oneThird", "oneThird"]}
+                        gap="200"
+                      >
+                        <Text as="span" variant="bodySm" fontWeight="medium">
+                          {humanizeField(d.field)}
+                        </Text>
+                        <Text as="span" variant="bodySm" tone="subdued">
+                          {humanizeValue(d.field, d.before)}
+                        </Text>
+                        <Text as="span" variant="bodySm">
+                          {humanizeValue(d.field, d.after)}
+                        </Text>
+                      </InlineGrid>
+                    </Fragment>
+                  ))}
                 </BlockStack>
               </Box>
-            </Collapsible>
+            )}
           </BlockStack>
         </IndexTable.Cell>
         <IndexTable.Cell>

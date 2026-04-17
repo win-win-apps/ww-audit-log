@@ -115,9 +115,10 @@ export function friendlySummary(opts: {
 
   if (topic.startsWith("inventory_levels")) {
     if (typeof opts.inventoryAvailable === "number") {
-      return `${staff} set inventory to ${opts.inventoryAvailable} on ${title}`;
+      const unit = opts.inventoryAvailable === 1 ? "unit" : "units";
+      return `${staff} set inventory to ${opts.inventoryAvailable} ${unit}`;
     }
-    return `${staff} updated inventory on ${title}`;
+    return `${staff} updated inventory`;
   }
 
   if (topic.endsWith("/update")) {
