@@ -2,6 +2,7 @@ import "@shopify/shopify-app-remix/adapters/node";
 import {
   ApiVersion,
   AppDistribution,
+  BillingInterval,
   shopifyApp,
 } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
@@ -9,6 +10,11 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
+
+// Billing plans. Names here are the keys billing.request / billing.check use.
+// Keep these in sync with PLANS in app/utils/plan.ts and the App Store listing.
+export const PRO_PLAN = "Pro" as const;
+export const PREMIUM_PLAN = "Premium" as const;
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -19,6 +25,26 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  billing: {
+    [PRO_PLAN]: {
+      lineItems: [
+        {
+          amount: 3.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+    },
+    [PREMIUM_PLAN]: {
+      lineItems: [
+        {
+          amount: 7.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+    },
+  },
   future: {
     unstable_newEmbeddedAuthStrategy: true,
   },
