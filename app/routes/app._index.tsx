@@ -4,7 +4,7 @@ import { Link, useLoaderData, useSearchParams } from "@remix-run/react";
 import {
   Page,
   Card,
-  IndexTable,
+  DataTable,
   Text,
   Badge,
   BlockStack,
@@ -16,8 +16,9 @@ import {
   TextField,
   Icon,
   Thumbnail,
+  Divider,
 } from "@shopify/polaris";
-import { SearchIcon, XIcon } from "@shopify/polaris-icons";
+import { SearchIcon, XIcon, RefreshIcon } from "@shopify/polaris-icons";
 import { useEffect, useMemo, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -76,7 +77,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ];
   }
 
-  const [events, totalEvents, distinctStaff] = await Promise.all([
+  const [events, totalEvents, distinctStaff, windowEventCount] = await Promise.all([
     prisma.auditEvent.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -89,6 +90,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       distinct: ["staffName"],
       take: 20,
     }),
+    // Full count for the filtered window so the summary row reflects the real
+    // total, not just the 100 we render.
+    prisma.auditEvent.count({ where }),
   ]);
 
   return json({
@@ -97,6 +101,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       createdAt: e.createdAt.toISOString(),
     })),
     totalEvents,
+    windowEventCount,
     staffOptions: distinctStaff.map((s) => s.staffName).filter(Boolean) as string[],
     settings: {
       plan: normalisePlan(settings.plan),
@@ -125,6 +130,16 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+function shortClockTime(iso: string | null): string {
+  if (!iso) return "Never";
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 // Every category we know how to record. Mirrors CATEGORY_PLAN in plan.ts.
 // Polaris Badge tones: success, attention, new, warning, critical, info,
 // magic, read-only. We use them as a rough palette — not meant to carry
@@ -149,7 +164,7 @@ const CATEGORY_META: Record<string, { tone: any; label: string }> = {
 };
 
 export default function TimelinePage() {
-  const { events, totalEvents, staffOptions, settings, planLabel, filters, sort } =
+  const { events, totalEvents, windowEventCount, staffOptions, settings, planLabel, filters, sort } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -313,56 +328,78 @@ export default function TimelinePage() {
     return copy;
   }, [flat, sort.key, sort.dir]);
 
-  const rows = sortedRows.map((r, i) => {
+  // Summary stats for the top-of-table "Summary" row. Shopify reports show a
+  // bold totals row with aggregates for the current window; we do the same
+  // with counts that make sense for an audit log (events, unique items,
+  // unique staff, categories touched).
+  const summary = useMemo(() => {
+    const uniqueItems = new Set(
+      sortedRows.map((r) => r.itemLabel).filter((v) => v && v.length > 0),
+    ).size;
+    const uniqueStaff = new Set(
+      sortedRows.map((r) => r.staffName || "").filter((v) => v.length > 0),
+    ).size;
+    const uniqueCategories = new Set(sortedRows.map((r) => r.category)).size;
+    return {
+      visibleRows: sortedRows.length,
+      items: uniqueItems,
+      staff: uniqueStaff,
+      categories: uniqueCategories,
+    };
+  }, [sortedRows]);
+
+  // Most recent event drives the "Last refreshed" clock in the header. If the
+  // store has never generated an event this just shows "Never".
+  const lastRefreshedIso = events[0]?.createdAt || null;
+  const lastRefreshed = shortClockTime(lastRefreshedIso);
+
+  // Pretty label for the active window, used on the filter chip.
+  const windowLabel = isUnlimited(filters.effectiveDays)
+    ? "All time"
+    : filters.effectiveDays === 1
+      ? "Last 24 hours"
+      : filters.effectiveDays === 365
+        ? "Last year"
+        : `Last ${filters.effectiveDays} days`;
+
+  // DataTable accepts ReactNodes in each cell so we can still render Badges
+  // and thumbnails inside a native report-style table.
+  const tableRows: React.ReactNode[][] = sortedRows.map((r) => {
     const meta = CATEGORY_META[r.category] || { tone: undefined, label: r.category };
-    return (
-      <IndexTable.Row id={r.id} key={r.id} position={i}>
-        <IndexTable.Cell>
-          <Badge tone={meta.tone}>{meta.label}</Badge>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          {r.itemLabel ? (
-            <InlineStack gap="200" blockAlign="center" wrap={false}>
-              {r.thumbnail ? (
-                <Thumbnail
-                  source={r.thumbnail}
-                  alt={r.itemLabel}
-                  size="extraSmall"
-                />
-              ) : null}
-              <Text as="span" variant="bodyMd">{r.itemLabel}</Text>
-            </InlineStack>
-          ) : (
-            <Text as="span" variant="bodySm" tone="subdued">
-              {""}
-            </Text>
-          )}
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" variant="bodyMd">{r.whatChanged}</Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">
-            {r.before || ""}
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" variant="bodySm">
-            {r.after || ""}
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">
-            {r.staffName || "A staff member"}
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">
-            {relativeTime(r.createdAt)}
-          </Text>
-        </IndexTable.Cell>
-      </IndexTable.Row>
-    );
+    return [
+      <Badge key={`type-${r.id}`} tone={meta.tone}>{meta.label}</Badge>,
+      r.itemLabel ? (
+        <InlineStack key={`item-${r.id}`} gap="200" blockAlign="center" wrap={false}>
+          {r.thumbnail ? (
+            <Thumbnail
+              source={r.thumbnail}
+              alt={r.itemLabel}
+              size="extraSmall"
+            />
+          ) : null}
+          <Text as="span" variant="bodyMd">{r.itemLabel}</Text>
+        </InlineStack>
+      ) : (
+        <Text key={`item-${r.id}`} as="span" tone="subdued">
+          {""}
+        </Text>
+      ),
+      <Text key={`what-${r.id}`} as="span" variant="bodyMd">
+        {r.whatChanged}
+      </Text>,
+      <Text key={`before-${r.id}`} as="span" variant="bodySm" tone="subdued">
+        {r.before || ""}
+      </Text>,
+      <Text key={`after-${r.id}`} as="span" variant="bodySm">
+        {r.after || ""}
+      </Text>,
+      <Text key={`who-${r.id}`} as="span" variant="bodySm" tone="subdued">
+        {r.staffName || "A staff member"}
+      </Text>,
+      <Text key={`when-${r.id}`} as="span" variant="bodySm" tone="subdued">
+        {relativeTime(r.createdAt)}
+      </Text>,
+    ];
   });
 
   // Only show time-range chips up to the plan retention. Capping them
@@ -399,31 +436,129 @@ export default function TimelinePage() {
   }).toString()}`;
 
   return (
-    <Page
-      title="Activity timeline"
-      subtitle={`${totalEvents} total events tracked on this store`}
-      primaryAction={{
-        content: "Export CSV",
-        // Polaris Page primaryAction passes `external` straight to the <a>.
-        // Omit it entirely so React doesn't warn about a non-boolean attribute,
-        // and the browser triggers the Content-Disposition: attachment download.
-        url: exportHref,
-      }}
-      secondaryActions={[{ content: "Settings", url: "/app/settings" }]}
-    >
+    <Page fullWidth>
       <BlockStack gap="400">
-        {settings.plan === "free" && (
-          <Banner title={`You are on the ${planLabel} plan`} tone="info">
-            <Text as="p">
-              Tracking every admin action on your store. Free keeps a {settings.retentionDays} day rolling window.
+        {/* Report-style header: title + last refreshed + actions, mirrors the
+            top of a native Shopify analytics report. */}
+        <InlineStack align="space-between" blockAlign="start" wrap>
+          <BlockStack gap="100">
+            <InlineStack gap="300" blockAlign="center" wrap>
+              <Text as="h1" variant="headingXl">
+                Activity report
+              </Text>
+              <InlineStack gap="100" blockAlign="center">
+                <Icon source={RefreshIcon} tone="subdued" />
+                <Text as="span" variant="bodySm" tone="subdued">
+                  Last refreshed: {lastRefreshed}
+                </Text>
+              </InlineStack>
+            </InlineStack>
+            <Text as="p" variant="bodySm" tone="subdued">
+              {totalEvents.toLocaleString()} total events tracked on this store
             </Text>
-            <Box paddingBlockStart="200">
-              <Link to="/app/billing">
-                Upgrade to Paid for unlimited history and backfill up to a year of past events.
-              </Link>
-            </Box>
-          </Banner>
-        )}
+          </BlockStack>
+          <InlineStack gap="200">
+            <Link to="/app/settings">
+              <Button variant="tertiary">Settings</Button>
+            </Link>
+            <Link to="/app/billing">
+              <Button variant="tertiary">Billing</Button>
+            </Link>
+            <a href={exportHref}>
+              <Button variant="primary">Export CSV</Button>
+            </a>
+          </InlineStack>
+        </InlineStack>
+
+        {/* Filter pill row. Tight spacing, small buttons so it reads like the
+            chip row on a native report page. */}
+        <Card padding="300">
+          <BlockStack gap="300">
+            <InlineStack gap="200" wrap align="space-between">
+              <InlineStack gap="200" wrap>
+                {daysOptions.map((opt) => (
+                  <Button
+                    key={opt.value}
+                    pressed={String(filters.effectiveDays) === opt.value}
+                    onClick={() => setParam("days", opt.value)}
+                    size="slim"
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+              </InlineStack>
+              {anyFilter && (
+                <Button
+                  size="slim"
+                  variant="tertiary"
+                  icon={XIcon}
+                  onClick={clearAllFilters}
+                >
+                  Clear filters
+                </Button>
+              )}
+            </InlineStack>
+
+            <InlineStack gap="200" wrap>
+              {categoryOptions.map((opt) => (
+                <Button
+                  key={opt.value || "all"}
+                  pressed={filters.category === opt.value}
+                  onClick={() => setParam("category", opt.value || null)}
+                  size="slim"
+                  variant="tertiary"
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </InlineStack>
+
+            <InlineStack gap="300" wrap blockAlign="center">
+              <Box minWidth="280px">
+                <TextField
+                  label="Search events"
+                  labelHidden
+                  prefix={<Icon source={SearchIcon} />}
+                  placeholder="Search by product, order, or event detail"
+                  value={searchInput}
+                  onChange={setSearchInput}
+                  onBlur={() => setParam("q", searchInput || null)}
+                  clearButton
+                  onClearButtonClick={() => {
+                    setSearchInput("");
+                    setParam("q", null);
+                  }}
+                  autoComplete="off"
+                />
+              </Box>
+
+              {staffOptions.length > 0 ? (
+                <InlineStack gap="100" wrap blockAlign="center">
+                  <Text as="span" variant="bodySm" tone="subdued">Staff:</Text>
+                  <Button
+                    size="slim"
+                    variant="tertiary"
+                    pressed={!filters.staff}
+                    onClick={() => setParam("staff", null)}
+                  >
+                    Anyone
+                  </Button>
+                  {staffOptions.map((name) => (
+                    <Button
+                      key={name}
+                      size="slim"
+                      variant="tertiary"
+                      pressed={filters.staff === name}
+                      onClick={() => setParam("staff", name)}
+                    >
+                      {name}
+                    </Button>
+                  ))}
+                </InlineStack>
+              ) : null}
+            </InlineStack>
+          </BlockStack>
+        </Card>
 
         {filters.clamped && (
           <Banner tone="warning">
@@ -435,96 +570,74 @@ export default function TimelinePage() {
           </Banner>
         )}
 
+        {/* Summary row that mirrors the bold "Summary" row at the top of a
+            Shopify report. Small labels on top, large numbers underneath. */}
         <Card padding="0">
           <Box padding="400">
-            <BlockStack gap="300">
-              <InlineStack gap="200" wrap align="space-between">
-                <InlineStack gap="200" wrap>
-                  {daysOptions.map((opt) => (
-                    <Button
-                      key={opt.value}
-                      pressed={String(filters.effectiveDays) === opt.value}
-                      onClick={() => setParam("days", opt.value)}
-                      size="slim"
-                    >
-                      {opt.label}
-                    </Button>
-                  ))}
-                </InlineStack>
-                {anyFilter && (
-                  <Button
-                    size="slim"
-                    variant="tertiary"
-                    icon={XIcon}
-                    onClick={clearAllFilters}
-                  >
-                    Clear filters
-                  </Button>
-                )}
-              </InlineStack>
-
-              <InlineStack gap="200" wrap>
-                {categoryOptions.map((opt) => (
-                  <Button
-                    key={opt.value || "all"}
-                    pressed={filters.category === opt.value}
-                    onClick={() => setParam("category", opt.value || null)}
-                    size="slim"
-                    variant="tertiary"
-                  >
-                    {opt.label}
-                  </Button>
-                ))}
-              </InlineStack>
-
-              <InlineStack gap="300" wrap>
-                <Box minWidth="240px">
-                  <TextField
-                    label="Search events"
-                    labelHidden
-                    prefix={<Icon source={SearchIcon} />}
-                    placeholder="Search by product, order, or event detail"
-                    value={searchInput}
-                    onChange={setSearchInput}
-                    onBlur={() => setParam("q", searchInput || null)}
-                    clearButton
-                    onClearButtonClick={() => {
-                      setSearchInput("");
-                      setParam("q", null);
-                    }}
-                    autoComplete="off"
-                  />
-                </Box>
-
-                {/* Staff filter is always on now. Both plans get full filtering. */}
-                {staffOptions.length > 0 ? (
-                  <InlineStack gap="100" wrap>
-                    <Text as="span" variant="bodySm" tone="subdued">Staff:</Text>
-                    <Button
-                      size="slim"
-                      variant="tertiary"
-                      pressed={!filters.staff}
-                      onClick={() => setParam("staff", null)}
-                    >
-                      Anyone
-                    </Button>
-                    {staffOptions.map((name) => (
-                      <Button
-                        key={name}
-                        size="slim"
-                        variant="tertiary"
-                        pressed={filters.staff === name}
-                        onClick={() => setParam("staff", name)}
-                      >
-                        {name}
-                      </Button>
-                    ))}
-                  </InlineStack>
-                ) : null}
-              </InlineStack>
-            </BlockStack>
+            <InlineStack gap="1000" wrap blockAlign="start">
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Window
+                </Text>
+                <Text as="p" variant="headingLg">
+                  {windowLabel}
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  {windowEventCount.toLocaleString()} events
+                </Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Total changes
+                </Text>
+                <Text as="p" variant="headingLg">
+                  {summary.visibleRows.toLocaleString()}
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  across shown rows
+                </Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Items affected
+                </Text>
+                <Text as="p" variant="headingLg">
+                  {summary.items.toLocaleString()}
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  unique resources
+                </Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Staff members
+                </Text>
+                <Text as="p" variant="headingLg">
+                  {summary.staff.toLocaleString()}
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  who made edits
+                </Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Categories
+                </Text>
+                <Text as="p" variant="headingLg">
+                  {summary.categories.toLocaleString()}
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  touched this window
+                </Text>
+              </BlockStack>
+            </InlineStack>
           </Box>
+        </Card>
 
+        {/* The table itself, rendered as a DataTable so we get the spreadsheet
+            feel of a native Shopify report (no row selection checkboxes, no
+            hover highlight bar). */}
+        <Card padding="0">
           {events.length === 0 ? (
             anyFilter ? (
               <EmptyState
@@ -546,27 +659,46 @@ export default function TimelinePage() {
               </EmptyState>
             )
           ) : (
-            <IndexTable
-              resourceName={{ singular: "change", plural: "changes" }}
-              itemCount={sortedRows.length}
-              selectable={false}
-              headings={[
-                { title: "Type" },
-                { title: "Item" },
-                { title: "What changed" },
-                { title: "Before" },
-                { title: "After" },
-                { title: "Who" },
-                { title: "When" },
-              ]}
-              sortable={[true, true, true, true, true, true, true]}
-              sortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 6}
-              sortDirection={sortDirection}
-              onSort={onSort}
-              defaultSortDirection="descending"
-            >
-              {rows}
-            </IndexTable>
+            <>
+              <Box paddingInline="400" paddingBlockStart="400" paddingBlockEnd="200">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h2" variant="headingMd">
+                    Changes
+                  </Text>
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    Showing {sortedRows.length.toLocaleString()} of {windowEventCount.toLocaleString()}
+                  </Text>
+                </InlineStack>
+              </Box>
+              <Divider />
+              <DataTable
+                columnContentTypes={[
+                  "text",
+                  "text",
+                  "text",
+                  "text",
+                  "text",
+                  "text",
+                  "text",
+                ]}
+                headings={[
+                  "Type",
+                  "Item",
+                  "What changed",
+                  "Before",
+                  "After",
+                  "Who",
+                  "When",
+                ]}
+                rows={tableRows}
+                sortable={[true, true, true, true, true, true, true]}
+                initialSortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 6}
+                defaultSortDirection={sortDirection}
+                onSort={onSort}
+                hoverable
+                truncate
+              />
+            </>
           )}
         </Card>
 
