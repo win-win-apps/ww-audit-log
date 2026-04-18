@@ -23,13 +23,26 @@ const prisma = new PrismaClient();
 // Use test charges on dev stores so we never hit a real card during development.
 const IS_TEST = process.env.NODE_ENV !== "production";
 
-// Build a returnUrl that works whether SHOPIFY_APP_URL is set or not. In local
-// dev the Shopify CLI rotates the tunnel URL every restart, so we prefer the
-// incoming request origin if the env var is missing.
-function buildReturnUrl(request: Request, target: string): string {
-  const envBase = process.env.SHOPIFY_APP_URL;
-  const base = envBase || new URL(request.url).origin;
-  return `${base}/app/billing?upgraded=${encodeURIComponent(target)}`;
+// Build a returnUrl that lands the merchant back inside the embedded admin
+// iframe after they approve the charge on Shopify's billing page. If we
+// return a raw tunnel URL (like lights-traffic-got-joint.trycloudflare.com),
+// the browser loads it outside the admin shell, has no App Bridge context,
+// no session cookies, and authenticate.admin bounces to /auth/login with no
+// shop param, which returns a blank {} response.
+//
+// The admin-embedded URL pattern https://{shop}/admin/apps/{apiKey}/{path}
+// instead asks Shopify to re-host the app inside admin.shopify.com with a
+// fresh App Bridge context, which is what we actually want.
+function buildReturnUrl(shop: string, target: string): string {
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  const suffix = `app/billing?upgraded=${encodeURIComponent(target)}`;
+  if (!apiKey) {
+    // No API key means local dev without env var. Fall back to a relative URL
+    // so Shopify at least doesn't throw; the iframe may not resume cleanly
+    // but the user won't see a blank page.
+    return `/${suffix}`;
+  }
+  return `https://${shop}/admin/apps/${apiKey}/${suffix}`;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -120,7 +133,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return await billing.request({
         plan: PAID_PLAN,
         isTest: IS_TEST,
-        returnUrl: buildReturnUrl(request, "paid"),
+        returnUrl: buildReturnUrl(session.shop, "paid"),
       });
     } catch (err: any) {
       // The thrown redirect Response is the happy path. Only real errors land
