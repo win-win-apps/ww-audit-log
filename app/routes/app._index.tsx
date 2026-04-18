@@ -17,8 +17,16 @@ import {
   Icon,
   Thumbnail,
   Divider,
+  Popover,
+  OptionList,
+  DatePicker,
 } from "@shopify/polaris";
-import { SearchIcon, XIcon, RefreshIcon } from "@shopify/polaris-icons";
+import {
+  SearchIcon,
+  XIcon,
+  RefreshIcon,
+  CalendarIcon,
+} from "@shopify/polaris-icons";
 import { useEffect, useMemo, useState } from "react";
 import { PrismaClient } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -57,17 +65,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const sort: SortKey = rawSort && SORT_KEYS.includes(rawSort) ? rawSort : "when";
   const dir = url.searchParams.get("dir") === "asc" ? "asc" : "desc";
 
-  // Clamp the days filter to the plan's retention. Merchants on Free cant meaningfully
-  // pick Last 90 days because nothing older than 3 is retained. Show a banner in that case.
-  // Paid plans have "unlimited" retention (sentinel value), so the clamp only bites on Free.
+  // Date range. Two modes:
+  //   preset: ?days=30 (or any of our preset day values)
+  //   custom: ?from=2026-04-01&to=2026-04-17 (inclusive, YYYY-MM-DD)
+  // Custom wins when both from and to parse as valid dates.
+  const rawFrom = url.searchParams.get("from") || "";
+  const rawTo = url.searchParams.get("to") || "";
+  const parsedFrom = rawFrom ? new Date(rawFrom) : null;
+  const parsedTo = rawTo ? new Date(rawTo) : null;
+  const usingCustom =
+    parsedFrom !== null && !isNaN(parsedFrom.getTime()) &&
+    parsedTo !== null && !isNaN(parsedTo.getTime());
+
   const defaultDays = Math.min(settings.retentionDays, 30);
   const requestedDays = Number(url.searchParams.get("days") || String(defaultDays));
   const effectiveDays = Math.min(requestedDays, settings.retentionDays);
 
-  const since = new Date();
-  since.setDate(since.getDate() - effectiveDays);
+  let since: Date;
+  let until: Date;
+  let clamped = false;
+  if (usingCustom) {
+    since = new Date(parsedFrom!);
+    since.setHours(0, 0, 0, 0);
+    until = new Date(parsedTo!);
+    until.setHours(23, 59, 59, 999);
 
-  const where: any = { shop, createdAt: { gte: since } };
+    // Clamp to plan retention if the user asked for events older than we keep.
+    if (!isUnlimited(settings.retentionDays)) {
+      const earliest = new Date();
+      earliest.setDate(earliest.getDate() - settings.retentionDays);
+      earliest.setHours(0, 0, 0, 0);
+      if (since < earliest) {
+        since = earliest;
+        clamped = true;
+      }
+    }
+  } else {
+    since = new Date();
+    since.setDate(since.getDate() - effectiveDays);
+    until = new Date();
+    clamped = requestedDays > effectiveDays;
+  }
+
+  const where: any = { shop, createdAt: { gte: since, lte: until } };
   if (category) where.category = category;
   if (staff) where.staffName = { contains: staff, mode: "insensitive" };
   if (q) {
@@ -115,7 +155,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       q,
       requestedDays,
       effectiveDays,
-      clamped: requestedDays > effectiveDays,
+      clamped,
+      mode: usingCustom ? ("custom" as const) : ("preset" as const),
+      fromIso: since.toISOString(),
+      toIso: until.toISOString(),
     },
     sort: { key: sort, dir },
   });
@@ -353,14 +396,18 @@ export default function TimelinePage() {
   const lastRefreshedIso = events[0]?.createdAt || null;
   const lastRefreshed = shortClockTime(lastRefreshedIso);
 
-  // Pretty label for the active window, used on the filter chip.
-  const windowLabel = isUnlimited(filters.effectiveDays)
-    ? "All time"
-    : filters.effectiveDays === 1
-      ? "Last 24 hours"
-      : filters.effectiveDays === 365
-        ? "Last year"
-        : `Last ${filters.effectiveDays} days`;
+  // Pretty label for the active window, used in the summary card. Custom
+  // ranges render as "Custom"; presets get a human label.
+  const windowLabel =
+    filters.mode === "custom"
+      ? "Custom"
+      : isUnlimited(filters.effectiveDays)
+        ? "All time"
+        : filters.effectiveDays === 1
+          ? "Last 24 hours"
+          : filters.effectiveDays === 365
+            ? "Last year"
+            : `Last ${filters.effectiveDays} days`;
 
   // DataTable accepts ReactNodes in each cell so we can still render Badges
   // and thumbnails inside a native report-style table.
@@ -402,21 +449,6 @@ export default function TimelinePage() {
     ];
   });
 
-  // Only show time-range chips up to the plan retention. Capping them
-  // avoids showing merchants ranges that will always return empty.
-  // Paid = unlimited, so every option is available. Free = 3 days, so
-  // only the shortest window survives the filter.
-  const allDayOptions = [
-    { label: "Last 24 hours", value: "1" },
-    { label: "Last 3 days", value: "3" },
-    { label: "Last 7 days", value: "7" },
-    { label: "Last 30 days", value: "30" },
-    { label: "Last 90 days", value: "90" },
-    { label: "Last year", value: "365" },
-    { label: "All time", value: String(UNLIMITED_RETENTION) },
-  ];
-  const daysOptions = allDayOptions.filter((o) => Number(o.value) <= settings.retentionDays);
-
   // No category gating anymore. Every plan can see every category.
   const categoryOptions = [
     { label: "All categories", value: "" },
@@ -428,12 +460,20 @@ export default function TimelinePage() {
 
   const anyFilter = filters.category || filters.staff || filters.q;
 
-  const exportHref = `/app/export?${new URLSearchParams({
+  // CSV export uses the same window as the view. For custom ranges we pass
+  // from/to; for presets we pass days.
+  const exportParams = new URLSearchParams({
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.staff ? { staff: filters.staff } : {}),
     ...(filters.q ? { q: filters.q } : {}),
-    days: String(filters.effectiveDays),
-  }).toString()}`;
+  });
+  if (filters.mode === "custom") {
+    exportParams.set("from", filters.fromIso.slice(0, 10));
+    exportParams.set("to", filters.toIso.slice(0, 10));
+  } else {
+    exportParams.set("days", String(filters.effectiveDays));
+  }
+  const exportHref = `/app/export?${exportParams.toString()}`;
 
   return (
     <Page fullWidth>
@@ -474,20 +514,29 @@ export default function TimelinePage() {
             chip row on a native report page. */}
         <Card padding="300">
           <BlockStack gap="300">
-            <InlineStack gap="200" wrap align="space-between">
-              <InlineStack gap="200" wrap>
-                {daysOptions.map((opt) => (
-                  <Button
-                    key={opt.value}
-                    pressed={String(filters.effectiveDays) === opt.value}
-                    onClick={() => setParam("days", opt.value)}
-                    size="slim"
-                  >
-                    {opt.label}
-                  </Button>
-                ))}
-              </InlineStack>
-              {anyFilter && (
+            <InlineStack gap="200" wrap align="space-between" blockAlign="center">
+              <DateRangePill
+                mode={filters.mode}
+                fromIso={filters.fromIso}
+                toIso={filters.toIso}
+                effectiveDays={filters.effectiveDays}
+                maxDays={settings.retentionDays}
+                onApplyPreset={(days) => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set("days", String(days));
+                  next.delete("from");
+                  next.delete("to");
+                  setSearchParams(next, { replace: true });
+                }}
+                onApplyCustom={(fromYmd, toYmd) => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("days");
+                  next.set("from", fromYmd);
+                  next.set("to", toYmd);
+                  setSearchParams(next, { replace: true });
+                }}
+              />
+              {(anyFilter || filters.mode === "custom") && (
                 <Button
                   size="slim"
                   variant="tertiary"
@@ -710,5 +759,187 @@ export default function TimelinePage() {
         )}
       </BlockStack>
     </Page>
+  );
+}
+
+// Format a date as "Apr 18" or "Apr 18, 2025" depending on whether the year
+// matches the current year. Keeps the pill label short when the range is
+// within the current year (which is the common case).
+function formatShortDate(d: Date, opts: { alwaysYear?: boolean } = {}): string {
+  const showYear = opts.alwaysYear || d.getFullYear() !== new Date().getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(showYear ? { year: "numeric" } : {}),
+  });
+}
+
+// "Mar 18 - Apr 17, 2026" or "Dec 28, 2024 - Jan 3, 2025" across year boundary.
+// Hyphen with spaces because the project rules forbid em-dashes and en-dashes
+// render inconsistently across fonts.
+function formatRangeLabel(from: Date, to: Date): string {
+  const sameYear = from.getFullYear() === to.getFullYear();
+  const thisYear = new Date().getFullYear();
+  const currentYear = from.getFullYear() === thisYear && to.getFullYear() === thisYear;
+
+  if (sameYear) {
+    const f = formatShortDate(from, { alwaysYear: false });
+    const t = formatShortDate(to, { alwaysYear: !currentYear });
+    return `${f} - ${t}`;
+  }
+  return `${formatShortDate(from, { alwaysYear: true })} - ${formatShortDate(to, { alwaysYear: true })}`;
+}
+
+// YYYY-MM-DD slice, local time not UTC, so "today" really means today in the
+// merchant's timezone.
+function toYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+interface DateRangePillProps {
+  mode: "preset" | "custom";
+  fromIso: string;
+  toIso: string;
+  effectiveDays: number;
+  maxDays: number;
+  onApplyPreset: (days: number) => void;
+  onApplyCustom: (fromYmd: string, toYmd: string) => void;
+}
+
+// Shopify-report-style date selector. Two pill buttons (preset name + date
+// range) that share one popover. Popover has preset list on the left and a
+// two-month calendar on the right with a range selection.
+function DateRangePill({
+  mode,
+  fromIso,
+  toIso,
+  effectiveDays,
+  maxDays,
+  onApplyPreset,
+  onApplyCustom,
+}: DateRangePillProps) {
+  const [open, setOpen] = useState(false);
+
+  const fromDate = useMemo(() => new Date(fromIso), [fromIso]);
+  const toDate = useMemo(() => new Date(toIso), [toIso]);
+
+  // Preset definitions. Kept in sync with the loader's default windows so the
+  // pill never produces a value the loader doesn't understand.
+  const allPresets = [
+    { label: "Last 24 hours", days: 1 },
+    { label: "Last 3 days", days: 3 },
+    { label: "Last 7 days", days: 7 },
+    { label: "Last 30 days", days: 30 },
+    { label: "Last 90 days", days: 90 },
+    { label: "Last year", days: 365 },
+    { label: "All time", days: UNLIMITED_RETENTION },
+  ];
+  const presets = allPresets.filter((p) => p.days <= maxDays);
+
+  const currentPreset =
+    mode === "custom" ? null : presets.find((p) => p.days === effectiveDays);
+  const presetLabel =
+    mode === "custom"
+      ? "Custom"
+      : currentPreset?.label ||
+        (isUnlimited(effectiveDays) ? "All time" : `Last ${effectiveDays} days`);
+
+  // Date picker local state. Seeded from the URL each time we open, so the
+  // picker reflects whatever the loader resolved (including clamping).
+  const [pickerMonth, setPickerMonth] = useState(() => ({
+    month: fromDate.getMonth(),
+    year: fromDate.getFullYear(),
+  }));
+  const [pickerRange, setPickerRange] = useState<{ start: Date; end: Date }>(() => ({
+    start: fromDate,
+    end: toDate,
+  }));
+
+  useEffect(() => {
+    if (open) {
+      setPickerRange({ start: fromDate, end: toDate });
+      setPickerMonth({ month: fromDate.getMonth(), year: fromDate.getFullYear() });
+    }
+  }, [open, fromIso, toIso]);
+
+  const handleApply = () => {
+    onApplyCustom(toYmd(pickerRange.start), toYmd(pickerRange.end));
+    setOpen(false);
+  };
+
+  const rangeLabel = formatRangeLabel(fromDate, toDate);
+
+  const activator = (
+    <InlineStack gap="100" blockAlign="center" wrap={false}>
+      <Button
+        size="slim"
+        icon={CalendarIcon}
+        disclosure={open ? "up" : "down"}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {presetLabel}
+      </Button>
+      <Button
+        size="slim"
+        disclosure={open ? "up" : "down"}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {rangeLabel}
+      </Button>
+    </InlineStack>
+  );
+
+  return (
+    <Popover
+      active={open}
+      activator={activator}
+      onClose={() => setOpen(false)}
+      preferredAlignment="left"
+      preferredPosition="below"
+      fluidContent
+    >
+      <Box padding="200" minWidth="640px">
+        <InlineStack gap="400" wrap={false} blockAlign="start">
+          <Box minWidth="180px" paddingBlockStart="200">
+            <OptionList
+              options={presets.map((p) => ({
+                value: String(p.days),
+                label: p.label,
+              }))}
+              selected={currentPreset ? [String(currentPreset.days)] : []}
+              onChange={(vals) => {
+                const n = Number(vals[0]);
+                if (!isNaN(n)) {
+                  onApplyPreset(n);
+                  setOpen(false);
+                }
+              }}
+            />
+          </Box>
+          <Box>
+            <BlockStack gap="300">
+              <DatePicker
+                month={pickerMonth.month}
+                year={pickerMonth.year}
+                selected={pickerRange}
+                onChange={setPickerRange}
+                onMonthChange={(month, year) => setPickerMonth({ month, year })}
+                allowRange
+                multiMonth
+              />
+              <InlineStack gap="200" align="end">
+                <Button onClick={() => setOpen(false)}>Cancel</Button>
+                <Button variant="primary" onClick={handleApply}>
+                  Apply
+                </Button>
+              </InlineStack>
+            </BlockStack>
+          </Box>
+        </InlineStack>
+      </Box>
+    </Popover>
   );
 }
