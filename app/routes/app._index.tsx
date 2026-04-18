@@ -9,6 +9,7 @@ import {
   Badge,
   BlockStack,
   InlineStack,
+  InlineGrid,
   EmptyState,
   Button,
   Banner,
@@ -19,6 +20,7 @@ import {
   Divider,
   Popover,
   OptionList,
+  ChoiceList,
   DatePicker,
 } from "@shopify/polaris";
 import {
@@ -510,104 +512,47 @@ export default function TimelinePage() {
           </InlineStack>
         </InlineStack>
 
-        {/* Filter pill row. Tight spacing, small buttons so it reads like the
-            chip row on a native report page. */}
-        <Card padding="300">
-          <BlockStack gap="300">
-            <InlineStack gap="200" wrap align="space-between" blockAlign="center">
-              <DateRangePill
-                mode={filters.mode}
-                fromIso={filters.fromIso}
-                toIso={filters.toIso}
-                effectiveDays={filters.effectiveDays}
-                maxDays={settings.retentionDays}
-                onApplyPreset={(days) => {
-                  const next = new URLSearchParams(searchParams);
-                  next.set("days", String(days));
-                  next.delete("from");
-                  next.delete("to");
-                  setSearchParams(next, { replace: true });
-                }}
-                onApplyCustom={(fromYmd, toYmd) => {
-                  const next = new URLSearchParams(searchParams);
-                  next.delete("days");
-                  next.set("from", fromYmd);
-                  next.set("to", toYmd);
-                  setSearchParams(next, { replace: true });
-                }}
-              />
-              {(anyFilter || filters.mode === "custom") && (
-                <Button
-                  size="slim"
-                  variant="tertiary"
-                  icon={XIcon}
-                  onClick={clearAllFilters}
-                >
-                  Clear filters
-                </Button>
-              )}
-            </InlineStack>
-
-            <InlineStack gap="200" wrap>
-              {categoryOptions.map((opt) => (
-                <Button
-                  key={opt.value || "all"}
-                  pressed={filters.category === opt.value}
-                  onClick={() => setParam("category", opt.value || null)}
-                  size="slim"
-                  variant="tertiary"
-                >
-                  {opt.label}
-                </Button>
-              ))}
-            </InlineStack>
-
-            <InlineStack gap="300" wrap blockAlign="center">
-              <Box minWidth="280px">
-                <TextField
-                  label="Search events"
-                  labelHidden
-                  prefix={<Icon source={SearchIcon} />}
-                  placeholder="Search by product, order, or event detail"
-                  value={searchInput}
-                  onChange={setSearchInput}
-                  onBlur={() => setParam("q", searchInput || null)}
-                  clearButton
-                  onClearButtonClick={() => {
-                    setSearchInput("");
-                    setParam("q", null);
-                  }}
-                  autoComplete="off"
-                />
-              </Box>
-
-              {staffOptions.length > 0 ? (
-                <InlineStack gap="100" wrap blockAlign="center">
-                  <Text as="span" variant="bodySm" tone="subdued">Staff:</Text>
-                  <Button
-                    size="slim"
-                    variant="tertiary"
-                    pressed={!filters.staff}
-                    onClick={() => setParam("staff", null)}
-                  >
-                    Anyone
-                  </Button>
-                  {staffOptions.map((name) => (
-                    <Button
-                      key={name}
-                      size="slim"
-                      variant="tertiary"
-                      pressed={filters.staff === name}
-                      onClick={() => setParam("staff", name)}
-                    >
-                      {name}
-                    </Button>
-                  ))}
-                </InlineStack>
-              ) : null}
-            </InlineStack>
-          </BlockStack>
-        </Card>
+        {/* Chip row: date pills on the left, plan pill + filter-count on the
+            right. Mirrors the "Last year / Jan 1-Dec 31 / CAD $" row in the
+            native Shopify report. */}
+        <InlineStack gap="200" wrap align="space-between" blockAlign="center">
+          <InlineStack gap="200" wrap blockAlign="center">
+            <DateRangePill
+              mode={filters.mode}
+              fromIso={filters.fromIso}
+              toIso={filters.toIso}
+              effectiveDays={filters.effectiveDays}
+              maxDays={settings.retentionDays}
+              onApplyPreset={(days) => {
+                const next = new URLSearchParams(searchParams);
+                next.set("days", String(days));
+                next.delete("from");
+                next.delete("to");
+                setSearchParams(next, { replace: true });
+              }}
+              onApplyCustom={(fromYmd, toYmd) => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("days");
+                next.set("from", fromYmd);
+                next.set("to", toYmd);
+                setSearchParams(next, { replace: true });
+              }}
+            />
+            <Button size="slim" disabled>
+              {planLabel} plan
+            </Button>
+          </InlineStack>
+          {(anyFilter || filters.mode === "custom") && (
+            <Button
+              size="slim"
+              variant="tertiary"
+              icon={XIcon}
+              onClick={clearAllFilters}
+            >
+              Clear filters
+            </Button>
+          )}
+        </InlineStack>
 
         {filters.clamped && (
           <Banner tone="warning">
@@ -619,144 +564,232 @@ export default function TimelinePage() {
           </Banner>
         )}
 
-        {/* Summary row that mirrors the bold "Summary" row at the top of a
-            Shopify report. Small labels on top, large numbers underneath. */}
-        <Card padding="0">
-          <Box padding="400">
-            <InlineStack gap="1000" wrap blockAlign="start">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Window
-                </Text>
-                <Text as="p" variant="headingLg">
-                  {windowLabel}
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  {windowEventCount.toLocaleString()} events
-                </Text>
-              </BlockStack>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Total changes
-                </Text>
-                <Text as="p" variant="headingLg">
-                  {summary.visibleRows.toLocaleString()}
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  across shown rows
-                </Text>
-              </BlockStack>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Items affected
-                </Text>
-                <Text as="p" variant="headingLg">
-                  {summary.items.toLocaleString()}
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  unique resources
-                </Text>
-              </BlockStack>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Staff members
-                </Text>
-                <Text as="p" variant="headingLg">
-                  {summary.staff.toLocaleString()}
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  who made edits
-                </Text>
-              </BlockStack>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Categories
-                </Text>
-                <Text as="p" variant="headingLg">
-                  {summary.categories.toLocaleString()}
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  touched this window
-                </Text>
-              </BlockStack>
-            </InlineStack>
-          </Box>
-        </Card>
-
-        {/* The table itself, rendered as a DataTable so we get the spreadsheet
-            feel of a native Shopify report (no row selection checkboxes, no
-            hover highlight bar). */}
-        <Card padding="0">
-          {events.length === 0 ? (
-            anyFilter ? (
-              <EmptyState
-                heading="No events match these filters"
-                action={{ content: "Clear filters", onAction: clearAllFilters }}
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>Try widening the date range or clearing the category filter.</p>
-              </EmptyState>
-            ) : (
-              <EmptyState
-                heading="Your store is quiet"
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>
-                  Make a change in your Shopify admin (edit a product, update inventory) and it will
-                  appear here within a few seconds.
-                </p>
-              </EmptyState>
-            )
-          ) : (
-            <>
-              <Box paddingInline="400" paddingBlockStart="400" paddingBlockEnd="200">
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text as="h2" variant="headingMd">
-                    Changes
-                  </Text>
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    Showing {sortedRows.length.toLocaleString()} of {windowEventCount.toLocaleString()}
-                  </Text>
+        {/* Two-column layout: main content on the left, filters sidebar on the
+            right. Matches the native report layout where Metrics/Dimensions/
+            Filters live in a right-aligned card. */}
+        <InlineGrid
+          columns={{ xs: "1fr", lg: "1fr 300px" }}
+          gap="400"
+        >
+          <BlockStack gap="400">
+            {/* Summary row that mirrors the bold "Summary" row at the top of a
+                Shopify report. Small labels on top, large numbers underneath. */}
+            <Card padding="0">
+              <Box padding="400">
+                <InlineStack gap="800" wrap blockAlign="start">
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Window
+                    </Text>
+                    <Text as="p" variant="headingLg">
+                      {windowLabel}
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {windowEventCount.toLocaleString()} events
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Total changes
+                    </Text>
+                    <Text as="p" variant="headingLg">
+                      {summary.visibleRows.toLocaleString()}
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      across shown rows
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Items affected
+                    </Text>
+                    <Text as="p" variant="headingLg">
+                      {summary.items.toLocaleString()}
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      unique resources
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Staff members
+                    </Text>
+                    <Text as="p" variant="headingLg">
+                      {summary.staff.toLocaleString()}
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      who made edits
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Categories
+                    </Text>
+                    <Text as="p" variant="headingLg">
+                      {summary.categories.toLocaleString()}
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      touched
+                    </Text>
+                  </BlockStack>
                 </InlineStack>
               </Box>
-              <Divider />
-              <DataTable
-                columnContentTypes={[
-                  "text",
-                  "text",
-                  "text",
-                  "text",
-                  "text",
-                  "text",
-                  "text",
-                ]}
-                headings={[
-                  "Type",
-                  "Item",
-                  "What changed",
-                  "Before",
-                  "After",
-                  "Who",
-                  "When",
-                ]}
-                rows={tableRows}
-                sortable={[true, true, true, true, true, true, true]}
-                initialSortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 6}
-                defaultSortDirection={sortDirection}
-                onSort={onSort}
-                hoverable
-                truncate
-              />
-            </>
-          )}
-        </Card>
+            </Card>
 
-        {settings.plan === "free" && (
-          <Text as="p" variant="bodySm" tone="subdued" alignment="center">
-            Free keeps the last {settings.retentionDays} days. CSV export matches the visible window.{" "}
-            <Link to="/app/billing">Upgrade for unlimited history and backfill.</Link>
-          </Text>
-        )}
+            {/* The table itself, rendered as a DataTable so we get the
+                spreadsheet feel of a native Shopify report (no row selection
+                checkboxes, no hover highlight bar). */}
+            <Card padding="0">
+              {events.length === 0 ? (
+                anyFilter ? (
+                  <EmptyState
+                    heading="No events match these filters"
+                    action={{ content: "Clear filters", onAction: clearAllFilters }}
+                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                  >
+                    <p>Try widening the date range or clearing the category filter.</p>
+                  </EmptyState>
+                ) : (
+                  <EmptyState
+                    heading="Your store is quiet"
+                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                  >
+                    <p>
+                      Make a change in your Shopify admin (edit a product, update inventory) and it will
+                      appear here within a few seconds.
+                    </p>
+                  </EmptyState>
+                )
+              ) : (
+                <>
+                  <Box paddingInline="400" paddingBlockStart="400" paddingBlockEnd="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="h2" variant="headingMd">
+                        Changes
+                      </Text>
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        Showing {sortedRows.length.toLocaleString()} of {windowEventCount.toLocaleString()}
+                      </Text>
+                    </InlineStack>
+                  </Box>
+                  <Divider />
+                  <DataTable
+                    columnContentTypes={[
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                    ]}
+                    headings={[
+                      "Type",
+                      "Item",
+                      "What changed",
+                      "Before",
+                      "After",
+                      "Who",
+                      "When",
+                    ]}
+                    rows={tableRows}
+                    sortable={[true, true, true, true, true, true, true]}
+                    initialSortColumnIndex={sortColumnIndex >= 0 ? sortColumnIndex : 6}
+                    defaultSortDirection={sortDirection}
+                    onSort={onSort}
+                    hoverable
+                    truncate
+                  />
+                </>
+              )}
+            </Card>
+
+            {settings.plan === "free" && (
+              <Text as="p" variant="bodySm" tone="subdued" alignment="center">
+                Free keeps the last {settings.retentionDays} days. CSV export matches the visible window.{" "}
+                <Link to="/app/billing">Upgrade for unlimited history and backfill.</Link>
+              </Text>
+            )}
+          </BlockStack>
+
+          {/* Right sidebar: the native Shopify report puts Metrics / Dimensions
+              / Filters in a card on the right. We don't have metrics or a
+              grouping dimension for event rows, so we mirror just the Filters
+              section. */}
+          <Card padding="400">
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingSm">
+                Filters
+              </Text>
+
+              <BlockStack gap="150">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Search
+                </Text>
+                <TextField
+                  label="Search events"
+                  labelHidden
+                  prefix={<Icon source={SearchIcon} />}
+                  placeholder="Search product, order, or detail"
+                  value={searchInput}
+                  onChange={setSearchInput}
+                  onBlur={() => setParam("q", searchInput || null)}
+                  clearButton
+                  onClearButtonClick={() => {
+                    setSearchInput("");
+                    setParam("q", null);
+                  }}
+                  autoComplete="off"
+                />
+              </BlockStack>
+
+              <Divider />
+
+              <BlockStack gap="150">
+                <ChoiceList
+                  title="Category"
+                  choices={categoryOptions.map((o) => ({
+                    label: o.label,
+                    value: o.value,
+                  }))}
+                  selected={[filters.category]}
+                  onChange={(vals) => setParam("category", vals[0] || null)}
+                />
+              </BlockStack>
+
+              {staffOptions.length > 0 && (
+                <>
+                  <Divider />
+                  <BlockStack gap="150">
+                    <ChoiceList
+                      title="Staff"
+                      choices={[
+                        { label: "Anyone", value: "" },
+                        ...staffOptions.map((name) => ({ label: name, value: name })),
+                      ]}
+                      selected={[filters.staff]}
+                      onChange={(vals) => setParam("staff", vals[0] || null)}
+                    />
+                  </BlockStack>
+                </>
+              )}
+
+              {(anyFilter || filters.mode === "custom") && (
+                <>
+                  <Divider />
+                  <Button
+                    variant="tertiary"
+                    icon={XIcon}
+                    onClick={clearAllFilters}
+                    fullWidth
+                  >
+                    Clear all filters
+                  </Button>
+                </>
+              )}
+            </BlockStack>
+          </Card>
+        </InlineGrid>
       </BlockStack>
     </Page>
   );
